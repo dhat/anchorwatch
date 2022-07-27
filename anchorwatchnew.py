@@ -103,7 +103,8 @@ BUZZER_ON = 0x18
 BUZZER_OFF = 0x28
 BUZZER_BLINK = 0x48
 
-mSerial = serial.Serial(buzzer_dev, baudRate)
+if os.path.exists(buzzer_dev):
+  mSerial = serial.Serial(buzzer_dev, baudRate)
 
 # System Sounds:
 # TODO check that these paths exist
@@ -229,28 +230,33 @@ if __name__ == '__main__':
 
 
   def usb_buzzer_once():
-    sendCommand(mSerial, RED_ON)
-    sendCommand(mSerial, BUZZER_ON)
-    sleep(1.0)
-    sendCommand(mSerial, BUZZER_OFF)
-    sendCommand(mSerial, RED_OFF)
+    if os.path.exists(buzzer_dev):
+      sendCommand(serial.Serial(buzzer_dev, baudRate), RED_ON)
+      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
+      sleep(1.0)
+      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
+      sendCommand(serial.Serial(buzzer_dev, baudRate), RED_OFF)
 
 
   def usb_light_on():
-    sendCommand(mSerial, RED_BLINK)
+    if os.path.exists(buzzer_dev):
+      sendCommand(serial.Serial(buzzer_dev, baudRate), RED_BLINK)
 
 
   def usb_buzzer_on():
-    sendCommand(mSerial, BUZZER_ON)
+    if os.path.exists(buzzer_dev):
+      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
 
 
   def usb_buzzer_off():
-    sendCommand(mSerial, BUZZER_OFF)
+    if os.path.exists(buzzer_dev):
+      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
 
 
   def usb_buzzer_light_off():
-    sendCommand(mSerial, BUZZER_OFF)
-    sendCommand(mSerial, RED_OFF)
+    if os.path.exists(buzzer_dev):
+      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
+      sendCommand(serial.Serial(buzzer_dev, baudRate), RED_OFF)
 
 
   try:
@@ -459,16 +465,16 @@ if __name__ == '__main__':
     print("\nKilling GPS Monitor Thread...")  # normal exit
     gpsp.running = False
     gpsp.join()  # wait for the thread to finish what it's doing
-    if osname == "linux":
+    if osname == "linux" and os.path.exists(buzzer_dev):
       usb_buzzer_light_off()
-      mSerial.close()
+      serial.Serial(buzzer_dev, baudRate).close()
  
   except (KeyboardInterrupt, SystemExit):  # runs if you press ctrl+c to exit
     print("\nInterrupt Killing GPS Monitor Thread...")
     gpsp.running = False
     gpsp.join()  # wait for the thread to finish what it's doing
-    if osname == "linux":
+    if osname == "linux" and os.path.exists(buzzer_dev):
       usb_buzzer_light_off()
-      mSerial.close()
+      serial.Serial(buzzer_dev, baudRate).close()
   print("Done.\nExiting Anchor Watch.")
 
