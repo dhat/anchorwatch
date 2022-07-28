@@ -22,6 +22,7 @@
 # Doesn't work on non gpsd port, but gpsd can read from a tcp port: e.g. tcp://localhost:23000
 #
 # TODO:
+#  Fix not working with python 3.9
 #  Improve alarm test mode--too short right now so just blips
 #  Do time interval checks to improve acceleration
 #  Do vector speed change to improve acceleration
@@ -45,7 +46,10 @@
 #  OLD: redo this??  Exceeding alarm radius, first checks velocity is below some threshold--to id bad position data
 #  test thresholdspeed works--need acceleration logic??
 #
- 
+# For the USB buzzer, add this to a file in /etc/udev/rules.d/
+# ACTION=="add", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="buzzer"
+#
+
 import os
 from gps import *
 from time import *
