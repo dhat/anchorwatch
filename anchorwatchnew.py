@@ -12,6 +12,13 @@
 #
 # Last updated on 20150825 for raspberry pi and gpsd
 # Last updated on 20220722 to use on amd64 and running gpsd off of the airmar nmea
+# Last updated on 20221003:
+#   Fixes to check if data is still streaming from airmar and sounds alarm if not
+#   Check gpsd time is changing and print warning if not
+#   Use gpsd time as an invalid gps val
+#   Trigger gpsp restart if too many invalid gps vals
+#   Prints out DD + DMS + DDM for both lat and long
+#   Added in a gpsp restart to see if it can recover from a data failure
 #
 # Uses first position as reference--save in file for reuse?
 # Prompts user to enter alarm radius in feet--and change by entering "r" while running.
@@ -22,14 +29,18 @@
 # Doesn't work on non gpsd port, but gpsd can read from a tcp port: e.g. tcp://localhost:23000
 #
 # TODO:
+#  Save ref lat/long for later recall and when starting use by default with prompt unless distance from current is over some limit and then just prompt?
 #  Fix not working with python 3.9
+#  Better text with below: e.g. only print error on first go
+#  Test if data alarm catches problems and if the gpsp restart can recover after an airmar logger restart
+#  Test if the gps time test also catches the data problem
+#  Low Pri:
 #  Improve alarm test mode--too short right now so just blips
 #  Do time interval checks to improve acceleration
 #  Do vector speed change to improve acceleration
-#  Add wind direction? to improve sensitivity when drifting down-wind??
+#  Add wind direction? to improve sensitivity when drifting down-wind??--need to parse airmar directly??
 #  Add option to change max accel
 #  Do we want to keep the speed separate as an alarm trigger??
-#  save ref lat/long for later recall as ref
 #  MAYBE BELOW:
 #  refactor function names
 #  Increase volume??
@@ -86,6 +97,7 @@ ignore_fix_flag = False  # Set this if gps source doesn't have fix quality info 
 maxiseq = 10  # number of bad gps data in a row to trigger info alarm
 thresholdspeed = 1  # 15  # m/s where 0.5m/s is 1 knot and 15m/s is 30knots
 maxaccel = 5.0  # 10.0  # read-to-read max change in speed or data is ignored
+data_log_file_pattern = "/home/david/airmar-data/airmar-pb100-raw-log-*.csv"
 
 # For USB Buzzer:
 buzzer_dev = "/dev/buzzer"
@@ -130,7 +142,6 @@ errorSound.set_volume(1.0)
 # pygame.mixer.music.load(WARNING)
 # pygame.mixer.music.play()
 
-gpsd = None  # setting the global variable
 HOST = ''
 PORT = ''
 
@@ -164,25 +175,26 @@ def main(argv):
 class GpsPoller(threading.Thread):
   def __init__(self):
     threading.Thread.__init__(self)
-    global gpsd  # bring it in scope
-    gpsd = gps(mode=WATCH_ENABLE, host=HOST, port=PORT)  # starting the stream of info
+    self.session = gps(mode=WATCH_ENABLE, host=HOST, port=PORT)
     self.current_value = None
     self.running = True  # setting the thread running to true
- 
+
+  def get_current_value(self):
+   return self.current_value
+   # return self.next()
+
   def run(self):
-    global gpsd
-    while gpsp.running:
-      gpsd.next()  # this will continue to loop and grab EACH set of gpsd info to clear the buffer
+    try:
+      while self.running:
+        self.current_value = self.session.next()
+        time.sleep(0.2)  # tune this, you might not get values that quickly
+    except StopIteration:
+      self.running = False
+      pass
 
 
 if __name__ == '__main__':
   main(sys.argv[1:])
-  try: 
-    gpsp = GpsPoller() # create the thread
-  except:
-    print("Could not start gpsd monitor for host: ", HOST)
-    sys.exit()
-
 
   def calcDistance(lat1, lon1, lat2, lon2):
     # Calculate distance between two lat lons in NM
@@ -233,11 +245,11 @@ if __name__ == '__main__':
       serialport.write(bytes([cmd]))
 
 
-  def usb_buzzer_once():
+  def usb_buzzer_once(duration=0.5):
     if os.path.exists(buzzer_dev):
       sendCommand(serial.Serial(buzzer_dev, baudRate), RED_ON)
       sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
-      sleep(1.0)
+      sleep(duration)
       sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
       sendCommand(serial.Serial(buzzer_dev, baudRate), RED_OFF)
 
@@ -262,62 +274,80 @@ if __name__ == '__main__':
       sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
       sendCommand(serial.Serial(buzzer_dev, baudRate), RED_OFF)
 
+  def decdeg2dms(dd):
+    is_positive = dd >= 0
+    dd = abs(dd)
+    minutes, seconds = divmod(dd * 3600, 60)
+    degrees, minutes = divmod(minutes, 60)
+    degrees = degrees if is_positive else -degrees
+    return (degrees, minutes, seconds)
+
+
+  if osname == "linux" and os.path.exists(buzzer_dev):
+    usb_buzzer_light_off()
+    serial.Serial(buzzer_dev, baudRate).close()
+  try:
+    gpsp = GpsPoller()  # create the thread
+    gpsp.start()
+  except:
+    print("Could not start gpsd monitor for host: ", HOST, "and port", PORT)
+    sys.exit(2)
 
   try:
-    gpsp.start()  # start it up
-    while gpsd.fix.mode != 3:
-      os.system('clear')
+    fix = gpsp.get_current_value()
+    while True and gpsp.running:
+      # print("Fix:", fix)
       print("Waiting for GPS fix...")
-      sleep(1)
+      if fix is None or not 'lat' in fix.keys():
+        sleep(1)
+        fix = gpsp.get_current_value()
+        continue
+      # os.system('clear')
       print()
       print(' GPS reading for host: ', HOST)
       print('----------------------------------------')
-      print('latitude    ', gpsd.fix.latitude)
-      print('longitude   ', gpsd.fix.longitude)
-      print('time utc    ', gpsd.utc, ' + ', gpsd.fix.time)
-      print('altitude (m)', gpsd.fix.altitude)
-#      print 'eps         ', gpsd.fix.eps
-#      print 'epx         ', gpsd.fix.epx
-#      print 'epv         ', gpsd.fix.epv
-#      print 'ept         ', gpsd.fix.ept
-      print('speed (m/s) ', gpsd.fix.speed)
-#      print 'climb       ', gpsd.fix.climb
-      print('track       ', gpsd.fix.track)
-      print('mode        ', gpsd.fix.mode)
-      print()
-      print('sats        ', gpsd.satellites)
-      # Type checks
-      # print("lat type", type(gpsd.fix.latitude), gpsd.fix.latitude)
-      # print("fix type", type(gpsd.fix.time), gpsd.fix.time)
-      # print("utc type", type(gps.uts))  # invalid type
-      print("utc", gpsd.utc)
+      print('latitude    ', fix['lat'])
+      print('longitude   ', fix['lon'])
+      print('time utc    ', fix['time'])
+      print('altitude (m)', fix['alt'])
+      # print('ept         ', fix['ept'])
+      # print('eph         ', fix['eph'])
+      print('speed (m/s) ', fix['speed'])
+      # print('climb       ', fix['climb'])
+      print('track       ', fix['track'])
+      print('mode        ', fix['mode'])
+      print('status      ', fix['status'])
+      utc = fix['time']
 
-      if ignore_fix_flag and (gpsd.fix.latitude != 0.0 and not math.isnan(gpsd.fix.latitude)) and (gpsd.fix.longitude != 0.0 and not math.isnan(gpsd.fix.longitude)) and not math.isnan(gpsd.fix.time):  # and gps.utc != ''
+      if ignore_fix_flag and (fix['lat'] != 0.0 and not math.isnan(fix['lat'])) and (fix['lon'] != 0.0 and not math.isnan(fix['lon'])) and not math.isnan(fix['time']):  # and fix['time'] != ''
         break
+
+      if fix['mode'] == 3:
+        break
+
+      sleep(1)
+      fix = gpsp.get_current_value()
 
     print()
     if ignore_fix_flag:
       print("Ignoring fix flag")
     else:
-      # sleep(1)
-      os.system('clear')
+      # os.system('clear')
       print("Have GPS fix.")
     print(' GPS reading for host: ', HOST)
     print('----------------------------------------')
-    print('latitude    ', gpsd.fix.latitude)
-    print('longitude   ', gpsd.fix.longitude)
-    print('time utc    ', gpsd.utc, ' + ', gpsd.fix.time)
-    print('altitude (m)', gpsd.fix.altitude)
-#    print 'eps         ', gpsd.fix.eps
-#    print 'epx         ', gpsd.fix.epx
-#    print 'epv         ', gpsd.fix.epv
-#    print 'ept         ', gpsd.fix.ept
-    print('speed (m/s) ', gpsd.fix.speed)
-#    print 'climb       ', gpsd.fix.climb
-    print('track       ', gpsd.fix.track)
-    print('mode        ', gpsd.fix.mode)
-    print()
-    print('sats        ', gpsd.satellites)
+    print('latitude    ', fix['lat'])
+    print('longitude   ', fix['lon'])
+    print('time utc    ', fix['time'])
+    print('altitude (m)', fix['alt'])
+    # print('ept         ', fix['ept'])
+    # print('eph         ', fix['eph'])
+    print('speed (m/s) ', fix['speed'])
+    # print('climb       ', fix['climb'])
+    print('track       ', fix['track'])
+    print('mode        ', fix['mode'])
+    print('status      ', fix['status'])
+    utc = fix['time']
 
     nauticalMilePerLat = 60.00721
     nauticalMilePerLongitude = 60.10793
@@ -333,6 +363,7 @@ if __name__ == '__main__':
     distance = 0      # current distance from ref
     runcount = 0      # number of gps fixes/attempts
     aset = False      # flag for alarm state
+    adata = False     # check for data update errors
     buzzer_on = False
     light_on = False
     adistset = False  # flag for alarm radius set
@@ -346,9 +377,13 @@ if __name__ == '__main__':
     track = 0.0
     avgtrack = 0.0
 
+    # This is to prevent the next fix from having the same time and triggering an invalid gps data warning
+    sleep(2)
+
 
 #    sys.stdout = os.fdopen(sys.stdout.fileno(), "w", newline=None)
     while True:
+      fix = gpsp.get_current_value()
       runcount += 1
       if osname == "hildon":
         if aset:
@@ -376,7 +411,7 @@ if __name__ == '__main__':
             usb_light_on()
             light_on = True
 
-          # TODO catch error here? if these doesn't work??
+          # TODO catch error here? if these don't work??
           alertSounda.play()
           alertSound.play()
 
@@ -384,30 +419,85 @@ if __name__ == '__main__':
           print("Invalid gps", iseq, "times which is over threshold of", maxiseq)
           usb_buzzer_once()
           # errorSound.play()
+          print("Restarting GPS poller due to iseq")
+          gpsp.running = False
+          gpsp.join()
+          gpsp = GpsPoller()  # create the thread
+          gpsp.start()
+          if gpsp.running:
+            print("GPS poller running at", time.strftime("%D %H:%M:%S", time.localtime()))
+          else:
+            print("GPS not running at", time.strftime("%D %H:%M:%S", time.localtime()))
+          sleep(2)
+          fix = gpsp.get_current_value()
+          # iseq = 0
      
-      if gpsd.fix.mode != 3 and not ignore_fix_flag:
+      if fix['mode'] != 3 and not ignore_fix_flag:
+        if iseq == 0:
+          print('Invalid gps data at', time.strftime("%D %H:%M:%S", time.localtime()))
         iseq += 1
-        print('Invalid gps data', iseq)
         icount += 1
       else:
-        lat = float(gpsd.fix.latitude)
-        lon = float(gpsd.fix.longitude)
-        speed = gpsd.fix.speed
-        track = gpsd.fix.track
+        lat = float(fix['lat'])
+        lon = float(fix['lon'])
+        speed = fix['speed']
+        if "track" in fix:
+          track = fix['track']
         if not refset:
-          print("Latitude is ", lat, " Longitude is ", lon)
+          # print("Latitude is ", lat, " Longitude is ", lon)
+          degrees, minutes, seconds = decdeg2dms(lat)
+          print("Latitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (lat, degrees, minutes, seconds, degrees, minutes + seconds/60))
+          degrees, minutes, seconds = decdeg2dms(lon)
+          print("Longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (lon, degrees, minutes, seconds, degrees, minutes + seconds/60))
           reflat = lat
           reflon = lon
           refset = True
         if not adistset:
           print('\nCenter in decimal degrees is: lat=', lat, ' lon=', lon, ' with speed=', speed, 'm/s', time.strftime("%D %H:%M:%S", time.localtime()))
           adist = getradius(prompt="Enter new Alarm radius in feet (radius limit was " + str(adist) + " feet): ")
+          fix = gpsp.get_current_value()
           adistset = True
-          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.  Use \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, or \'q<enter>\' to quit the program.")
+          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.  Use \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'g<enter>\' to restart gps or \'q<enter>\' to quit the program.")
         if not speed_set:
           thresholdspeed = getradius(prompt="Enter new speed limit in m/s where 1.0 m/s is approx 2 knots (speed limit was " + str(thresholdspeed) + " m/s): ")
+          fix = gpsp.get_current_value()
           speed_set = True
-    
+          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.  Use \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'g<enter>\' to restart gps or \'q<enter>\' to quit the program.")
+
+        if len(data_log_file_pattern) > 0:
+          line_checks = 0
+          # This returns exit code 0 if time match is found and another integer if failed to find
+          line_count = int(os.system("tail " + data_log_file_pattern + " | grep -sqc \"$(date +'%Y-%m-%d, %H:%M')\""))
+          # print("TEST line count:", type(line_count), line_count)
+          while line_count != 0 and not adata:
+            # print("missing data", line_checks)
+            icount += 1
+            if line_checks > 10:
+              adata = True
+              print("Data not updated error in", line_checks, "checks at", time.strftime("%D %H:%M:%S", time.localtime()))
+              usb_buzzer_once()
+              break
+            sleep(1)
+            line_count = int(os.system("tail " + data_log_file_pattern + " | grep -sqc \"$(date +'%Y-%m-%d, %H:%M')\""))
+            # print("TEST line count again:", type(line_count), line_count)
+            line_checks += 1
+          if adata:
+            # and line_count == 0:
+            print("Restarting GPS poller due to adata at", time.strftime("%D %H:%M:%S", time.localtime()))
+            adata = False
+            gpsp.running = False
+            gpsp.join()
+            gpsp = GpsPoller()  # create the thread
+            gpsp.start()
+            if gpsp.running:
+              print("GPS poller running")
+            else:
+              print("GPS not running")
+            sleep(2)
+            fix = gpsp.get_current_value()
+            # TODO may not need the next line
+            continue
+
         distance = calcDistance(reflat, reflon, lat, lon)
         if math.isnan(distance) or speed > avgspeed + maxaccel:
           print("bad distance", distance, "with speed", speed, "m/s and acceleration", speed - avgspeed)
@@ -415,7 +505,19 @@ if __name__ == '__main__':
           icount += 1
           iseq += 1
         else:
-          iseq = 0
+          if utc == fix['time']:
+            if iseq == 0:
+              print("WARNING: Time stopped at GPS time", fix['time'], "at", time.strftime("%D %H:%M:%S", time.localtime()))
+            icount += 1
+            iseq += 1
+          else:
+            utc = fix['time']
+            if iseq > 0:
+              print("Resetting iseq at", time.strftime("%D %H:%M:%S", time.localtime()))
+              usb_buzzer_light_off()
+              buzzer_on = False
+              light_on = False
+            iseq = 0
           avgdist *= 0.8
           avgdist += 0.2 * distance
           if avgdist > mdist:
@@ -444,7 +546,7 @@ if __name__ == '__main__':
           # print("bad track", track)
           track = avgtrack
 
-        if avgdist > adist or avgspeed > thresholdspeed:  # and gpsd.fix.speed is below some m/s threshold
+        if adata or avgdist > adist or avgspeed > thresholdspeed:  # and speed is below some m/s threshold
           aset = True
         else:
           if aset:
@@ -465,20 +567,41 @@ if __name__ == '__main__':
         speed_set = False
       elif menu == 't':
         aset = True
-   
+      elif menu == 'g':
+        print("Restarting GPS poller on demand")
+        gpsp.running = False
+        gpsp.join()
+        gpsp = GpsPoller()  # create the thread
+        gpsp.start()
+        if gpsp.running:
+          print("GPS poller running")
+        else:
+          print("GPS not running")
+        sleep(5)
+        fix = gpsp.get_current_value()
+
+    # Exit while loop
     print("\nKilling GPS Monitor Thread...")  # normal exit
-    gpsp.running = False
-    gpsp.join()  # wait for the thread to finish what it's doing
     if osname == "linux" and os.path.exists(buzzer_dev):
       usb_buzzer_light_off()
       serial.Serial(buzzer_dev, baudRate).close()
+    gpsp.running = False
+    gpsp.join()  # wait for the thread to finish what it's doing
  
   except (KeyboardInterrupt, SystemExit):  # runs if you press ctrl+c to exit
     print("\nInterrupt Killing GPS Monitor Thread...")
-    gpsp.running = False
-    gpsp.join()  # wait for the thread to finish what it's doing
     if osname == "linux" and os.path.exists(buzzer_dev):
       usb_buzzer_light_off()
       serial.Serial(buzzer_dev, baudRate).close()
+    gpsp.running = False
+    gpsp.join()  # wait for the thread to finish what it's doing
+
+  except:
+    print("General failure with fix:", fix)
+    # Turn on buzzer alarm
+    if osname == "linux" and os.path.exists(buzzer_dev):
+      usb_buzzer_on()
+      usb_light_on()
+
   print("Done.\nExiting Anchor Watch.")
 
