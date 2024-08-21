@@ -30,6 +30,12 @@
 #   Precision first number is the larger of x or y position errors and second number is altitude position error.  Units are meters.
 #   Prints speed accuracy/error, but not sure how to use that yet.  Seems like if raw speed is greater than error there is a problem, but averaged error and speeds don't work the same way--no doubt because of vector.
 #   Added number of satellites being used and set an error threshold for min satellites
+# Last updated on 20240815
+#   Add a help menu 'h'
+#   Added compact output display and can toggle between them using menu 'x': compact display shows filtered outputs
+#   Added option to display center location and range/bearing menu 'a'
+#   Fixes: got output working right, and added some time stamps
+#   Created unified help string so only need to update in one place
 #
 # Operation:
 # Uses first position as reference unless choosing to input from file--saves reference location in file for reuse
@@ -41,8 +47,10 @@
 # Doesn't work on non gpsd port, but gpsd can read from a tcp port: e.g. tcp://localhost:23000
 #
 # TODO:
-#  Add ability to print current and center lat-lon plus maybe direction
-#  Add ability to enter custom lat lon
+#  Add ability to enter custom lat lon and/or range and bearing
+#  add something that shows what parameter is triggering the alarm
+#  track and show max errors
+#  add altitude to menu a option -- and maybe other details or create a details menu option
 #
 #  Better text with below: e.g. only print error on first go
 #  Figure out how to integrate with airmar logger
@@ -426,6 +434,7 @@ if __name__ == '__main__':
     track = 0.0
     avgtrack = 0.0
     extended_output = True
+    help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'x<enter>\' to toggle short and long output formats, \'t<enter>\' to test alarm, \'a<enter>\' for anchor position or \'q<enter>\' to quit the program."
 
     # This is to prevent the next fix from having the same time and triggering an invalid gps data warning
     sleep(2)
@@ -466,10 +475,13 @@ if __name__ == '__main__':
           alertSounda.play()
           alertSound.play()
 
-        # if iseq > maxiseq:
-        #   print("Invalid gps", iseq, "times which is over threshold of", maxiseq)
-        #   usb_buzzer_once()
-        #   # errorSound.play()
+        if iseq > maxiseq:
+           print("Invalid gps", iseq, "times which is over threshold of", maxiseq)
+           usb_light_on()
+           usb_buzzer_once()
+           sleep(1)
+           usb_buzzer_light_off
+           # errorSound.play()
         #   print("Restarting GPS poller due to iseq at", time.strftime("%D %H:%M:%S", time.localtime()))
         #   gpsp.running = False
         #   gpsp.join()
@@ -537,13 +549,13 @@ if __name__ == '__main__':
           adist = getradius(prompt="Enter new Alarm radius in feet (radius limit was " + str(adist) + " feet): ")
           fix = gpsd.get_current()
           adistset = True
-          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.  Use \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'t<enter>\' to test alarm, \'a<enter>\' for anchor position or \'q<enter>\' to quit the program.")
-          # print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.  Use \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'g<enter>\' to restart gps or \'q<enter>\' to quit the program.")
+          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.")
+          print(help_str)
         if not speed_set:
           thresholdspeed = getradius(prompt="Enter new speed limit in m/s where 1.0 m/s is approx 2 knots (speed limit was " + str(thresholdspeed) + " m/s): ")
           fix = gpsd.get_current()
           speed_set = True
-          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.  Use \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'t<enter>\' to test alam, \'a<enter>\' for anchor position or \'q<enter>\' to quit the program.")
+          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.")
 
         # if len(data_log_file_pattern) > 0:
         #   # This checks the data logger file which relies on the same ground truth as the gpsd.  So a failure here
@@ -587,7 +599,7 @@ if __name__ == '__main__':
         distance = calcDistance(reflat, reflon, lat, lon)
         bearing = calc_bearing(lat, lon, reflat, reflon)
         if math.isnan(distance) or speed > avgspeed + maxaccel:
-          print("bad distance", distance, "with speed", speed, "m/s and acceleration", speed - avgspeed)
+          print("bad distance", distance, "with speed", speed, "m/s and acceleration", speed - avgspeed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
           distance = 0.
           icount += 1
           iseq += 1
@@ -614,7 +626,7 @@ if __name__ == '__main__':
             mrawdist = distance
 
           if math.isnan(speed):
-            print("bad speed", speed)
+            print("bad speed", speed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
             speed = 0.
             icount += 1
             # set alarm??
@@ -626,7 +638,7 @@ if __name__ == '__main__':
             if speed > mrawspeed:
               mrawspeed = speed
           if min_sats > fix.sats_valid:
-            print("Not enough sats tracked:", fix.sats_valid, "out of total sats:", fix.sats, "and min setting:", min_sats)
+            print("Not enough sats tracked:", fix.sats_valid, "out of", fix.sats, "total with min sats:", min_sats, "at", time.strftime("%D %H:%M:%S", time.localtime()))
             icount += 1
 
         if not math.isnan(track):
@@ -641,7 +653,7 @@ if __name__ == '__main__':
           aset = True
         else:
           if aset:
-            print("Alarm cleared", time.strftime("%D %H:%M:%S", time.localtime()))
+            print("Alarm cleared at", time.strftime("%D %H:%M:%S", time.localtime()))
             usb_buzzer_light_off()
             buzzer_on = False
             light_on = False
@@ -652,12 +664,14 @@ if __name__ == '__main__':
       # sys.stdout.write('\rAlarm=%d: Cnt=%d: RawRad/mx=%d/%dfeet: SmRad/mx/lmt=%d/%d/%dft: RawSpd/mx=%.1f/%.1fm/s: SmSpd/mx/lmt=%.1f/%.1f/%.1fm/s: Trk/avg=%.1f/%.1fD: Ivd=%d/%d   ' % (aset,  acount, distance, mrawdist, avgdist, mdist, adist, speed, mrawspeed, avgspeed, maxspeed, thresholdspeed, track, avgtrack, icount, runcount))
       else:
         sys.stdout.write(
-          '\rAlarm=%d: Cnt=%d: Center=%dft/%03.0f degT/%dmax-ft/%.1f alarm-ft/%0.1ferr-ft: Speed=%.1fmps/%.1fmax-mps/%.1f alarm-mps/%.1ferr-mps: Ivld=%d/%d: sats=%d/%d:       ' % (
-          aset, acount, avgdist, bearing, mdist, adist - pos_error, pos_error, avgspeed, maxspeed, thresholdspeed, fix_error['s'], icount, runcount, fix.sats_valid, fix.sats))
+          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft:: Speed=%.1fmps/%.1falarm-mps %.1fmax-mps %.1ferr-mps:: Ivld=%d/%d:: sats=%d/%d::       ' % (
+          aset, acount, avgdist, adist - pos_error, bearing, mdist, pos_error, avgspeed, thresholdspeed, maxspeed, fix_error['s'], icount, runcount, fix.sats_valid, fix.sats))
       sys.stdout.flush()  # to clear when using \r
       menu = nonBlockingRawInput('')
       if menu == 'q':
         break
+      elif menu == 'h':
+        print(help_str)  
       elif menu == 'r':
         adistset = False
       elif menu == 's':
@@ -672,10 +686,10 @@ if __name__ == '__main__':
         print("\nCenter latitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflat, degrees, minutes, seconds, degrees, minutes + seconds/60))
         degrees, minutes, seconds = decdeg2dms(reflon)
         print("Center longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflon, degrees, minutes, seconds, degrees, minutes + seconds/60))
-        print("Center bearing from current position is %03.1f degrees True\n" % bearing)
+        print("Center bearing from current position is %03.1f degrees True and distance is %d feet at %s" % (bearing, distance, time.strftime("%D %H:%M:%S", time.localtime())))
       elif menu == 't':
         aset = True
-        print("Testing alarm")
+        print("\nTesting alarm")
         if os.path.exists(buzzer_dev):
           print("Buzzer exists")
         else:
