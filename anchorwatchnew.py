@@ -36,21 +36,30 @@
 #   Added option to display center location and range/bearing menu 'a'
 #   Fixes: got output working right, and added some time stamps
 #   Created unified help string so only need to update in one place
+#   Refactored function names
+#   Added alarm pause mode to stop the noise
+#   Add ability to enter custom lat lon
+#   Added altitude to menu a option
+#   Track and show max avg position errors
 #
 # Operation:
-# Uses first position as reference unless choosing to input from file--saves reference location in file for reuse
+# Uses first position as reference unless choosing to input from file or can now accept lat/lon too--saves reference location in file for reuse on next startup of the program.
 # Prompts user to enter alarm radius in feet--and can be changed by entering "r" while running.
-# Displays cur dist,max dist,alarm counts,alarm dist,invalid counts, and now speed in m/s
+# Displays cur dist,max dist,alarm counts,alarm dist,invalid counts, and now speed in m/s--also tracks GPS position errors and adapts alarm radius according to those errors
 # Entering "q" quits
+# Entering "h" shows all menu options
+# Entering "p" pauses audible alarm for about 30 seconds
 # Added raspberry pi gpio buzzer_program_filename output 20150825
 # Lots of trouble getting a non-blocking user input.  Still pauses for 2 secs.
 # Doesn't work on non gpsd port, but gpsd can read from a tcp port: e.g. tcp://localhost:23000
 #
 # TODO:
-#  Add ability to enter custom lat lon and/or range and bearing
+#  Reset max distance stats when new center position is entered.  Make sure max speed isn't spiked.  And reset alarm counter.
+#  Reverse order of c results so range is first and bearing 2nd
+#  Test iseq alarm works
+#  Add ability to enter center range and bearing
 #  add something that shows what parameter is triggering the alarm
-#  track and show max errors
-#  add altitude to menu a option -- and maybe other details or create a details menu option
+#  Add display of other GPSD fix details -- maybe create a GPSD fix details menu option
 #
 #  Better text with below: e.g. only print error on first go
 #  Figure out how to integrate with airmar logger
@@ -63,7 +72,6 @@
 #  Add option to change max accel
 #  Do we want to keep the speed separate as an alarm trigger??
 #  MAYBE BELOW:
-#  refactor function names
 #  Increase volume??
 #  get proper interrupt handling to switch to menu
 #  check lat/long N/S and E/W are same
@@ -202,12 +210,12 @@ def main(argv):
 if __name__ == '__main__':
   main(sys.argv[1:])
 
-  def calcDistance(lat1, lon1, lat2, lon2):
+  def calc_distance(lat1, lon1, lat2, lon2):
     point1 = (lat1, lon1)
     point2 = (lat2, lon2)
     return haversine(point1, point2, unit=Unit.FEET)
 
-  # def calcDistance(lat1, lon1, lat2, lon2):
+  # OLD def calc_distance(lat1, lon1, lat2, lon2):
     # Calculate distance between two lat lons in NM
     # """
     # yDistance = (lat1 - lat) * nauticalMilePerLat
@@ -228,13 +236,13 @@ if __name__ == '__main__':
     pass
 
 
-  def alarmHandler(signum, frame):
+  def alarm_handler(signum, frame):
     raise AlarmException
 
 
-  def nonBlockingRawInput(prompt='', timeout=2):
+  def non_blocking_raw_Input(prompt='', timeout=2):
     # from Gary Robinson
-    signal.signal(signal.SIGALRM, alarmHandler)
+    signal.signal(signal.SIGALRM, alarm_handler)
     signal.alarm(timeout)
     try:
       text = input(prompt)
@@ -249,7 +257,7 @@ if __name__ == '__main__':
     return ''
 
 
-  def getradius(prompt='Enter Alarm radius in feet:'):
+  def get_radius(prompt='Enter Alarm radius in feet:'):
     while True:
       try:
         val = float(input(prompt))
@@ -259,47 +267,73 @@ if __name__ == '__main__':
     return val
 
 
-  def sendCommand(serialport, cmd):
+  def get_dd_lat(prompt='Enter Center latitude in DD between -90 and 90 degrees:'):
+    while True:
+      try:
+        val = float(input(prompt))
+        if -90 <= val <= 90:
+          break
+        else:
+          print('Latitude must be between -90 and 90 degrees.')
+      except ValueError:
+        print('That is not a valid latitude.  Please try again.')
+    return val
+
+
+  def get_dd_lon(prompt='Enter Center longitude in DD between -180 and 180 degrees:'):
+    while True:
+      try:
+        val = float(input(prompt))
+        if -180 <= val <= 180:
+          break
+        else:
+          print('Longitude must be between -180 and 180 degrees.')
+      except ValueError:
+        print('That is not a valid longitude.  Please try again.')
+    return val
+
+
+  def send_command(serialport, cmd):
     if os.path.exists(buzzer_dev):
       serialport.write(bytes([cmd]))
 
 
   def usb_buzzer_once(duration=0.5):
     if os.path.exists(buzzer_dev):
-      sendCommand(serial.Serial(buzzer_dev, baudRate), RED_ON)
-      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
+      send_command(serial.Serial(buzzer_dev, baudRate), RED_ON)
+      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
       sleep(duration)
-      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
-      sendCommand(serial.Serial(buzzer_dev, baudRate), RED_OFF)
+      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
+      send_command(serial.Serial(buzzer_dev, baudRate), RED_OFF)
 
 
   def usb_light_on():
     if os.path.exists(buzzer_dev):
-      sendCommand(serial.Serial(buzzer_dev, baudRate), RED_BLINK)
+      send_command(serial.Serial(buzzer_dev, baudRate), RED_BLINK)
 
 
   def usb_buzzer_on():
     if os.path.exists(buzzer_dev):
-      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
+      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
 
 
   def usb_buzzer_off():
     if os.path.exists(buzzer_dev):
-      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
+      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
 
 
   def usb_buzzer_light_off():
     if os.path.exists(buzzer_dev):
-      sendCommand(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
-      sendCommand(serial.Serial(buzzer_dev, baudRate), RED_OFF)
+      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
+      send_command(serial.Serial(buzzer_dev, baudRate), RED_OFF)
 
   def decdeg2dms(dd):
     is_positive = dd >= 0
     dd = abs(dd)
-    minutes, seconds = divmod(dd * 3600, 60)
-    degrees, minutes = divmod(minutes, 60)
-    degrees = degrees if is_positive else -degrees
-    return (degrees, minutes, seconds)
+    fminutes, fseconds = divmod(dd * 3600, 60)
+    fdegrees, fminutes = divmod(fminutes, 60)
+    fdegrees = fdegrees if is_positive else -fdegrees
+    return fdegrees, fminutes, fseconds
 
 
   if osname == "linux" and os.path.exists(buzzer_dev):
@@ -427,14 +461,21 @@ if __name__ == '__main__':
     refset = False    # flag for reference lat/long set
     speed_set = True  # flag for setting speed
     iseq = 0          # number of sequential invalid data sets
+    pause_interval = 15  # duration of alarm pause
+    pause_count = 0   # tracks duration
     speed = 0.0       # speed in m/s
     maxspeed = 0.0    # max speed while at anchor
+    maxerror = 0.0    # track max position error
     avgspeed = 0.0
     mrawspeed = 0.0
     track = 0.0
     avgtrack = 0.0
-    extended_output = True
-    help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'x<enter>\' to toggle short and long output formats, \'t<enter>\' to test alarm, \'a<enter>\' for anchor position or \'q<enter>\' to quit the program."
+    extended_output = False  # default display option
+    lat = 0       # to ensure a value is set
+    lon = 0       # to ensure a value is set
+    reflat = 0    # to ensure a value is set
+    reflon = 0    # to ensure a value is set
+    help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'c<enter>\' to change circle center lat/lon, \'a<enter>\' to show anchor position, \'s<enter>\' to change speed limit, \'x<enter>\' to toggle short and long output formats, \'p<enter>\' to temporarily pause alarm, \'t<enter>\' to test alarm or \'q<enter>\' to quit the program."
 
     # This is to prevent the next fix from having the same time and triggering an invalid gps data warning
     sleep(2)
@@ -445,8 +486,10 @@ if __name__ == '__main__':
       #sleep(.4)
       fix = gpsd.get_current()
       runcount += 1
+      if pause_count > 0:
+        pause_count -= 1
       if osname == "hildon":
-        if aset:
+        if aset and pause_count == 0:
           hildon.hildon_play_system_sound("/usr/share/sounds/ui-general_warning.wav")
         # if iseq > maxiseq: hildon.hildon_play_system_sound("/usr/share/sounds/ui-general_warning.wav")
         # if iseq > maxiseq: hildon.hildon_play_system_sound("/usr/share/sounds/ui-default_beep.wav")
@@ -455,7 +498,7 @@ if __name__ == '__main__':
       if osname == "linux":
         # fix these:
         # if aset: pygame.mixer.music.play()
-        if aset:
+        if aset and pause_count == 0:
           if os.path.isfile(buzzer_program_filename):
             # call(["ls", "-l"])
             call([buzzer_program_filename])
@@ -480,23 +523,8 @@ if __name__ == '__main__':
            usb_light_on()
            usb_buzzer_once()
            sleep(1)
-           usb_buzzer_light_off
+           usb_buzzer_light_off()
            # errorSound.play()
-        #   print("Restarting GPS poller due to iseq at", time.strftime("%D %H:%M:%S", time.localtime()))
-        #   gpsp.running = False
-        #   gpsp.join()
-        #   gpsp = GpsPoller()  # create the thread
-        #   gpsp.start()
-        #   sleep(4)
-        #   if gpsp.running:
-        #     print("GPS poller running at", time.strftime("%D %H:%M:%S", time.localtime()))
-        #     # TODO this seems to be a failure point which causes program exit with an error.  E.g.:
-        #     # General failure with fix: <dictwrapper: {'class': 'TPV', 'device': 'tcp://localhost:23000', 'status': 2, 'mode': 3, 'time': '2022-10-21T10:32:19.000Z', 'ept': 0.005, 'lat': 38.228278333, 'lon': -121.525451667, 'altHAE': -14.0424, 'altMSL': 15.7, 'alt': 15.7, 'track': 31.9786, 'magtrack': 45.2, 'magvar': 13.2, 'geoidSep': -29.742, 'eph': 4.275, 'depth': 6.7}>
-        #     fix = gpsp.get_current_value()
-        #     # Set to something above 0 so we get the reset message below if it works but enough less than threshold so there is time for restart to kick in
-        #     iseq = 1
-        #   else:
-        #     print("GPS not running at", time.strftime("%D %H:%M:%S", time.localtime()))
      
       if fix.mode != 3 and not ignore_fix_flag:
         if iseq == 0:
@@ -512,6 +540,8 @@ if __name__ == '__main__':
         precision = fix.position_precision()
         pos_error *= 0.8
         pos_error += 0.2 * precision[0] * feet_per_meter
+        if pos_error > maxerror:
+          maxerror = pos_error
         fix_error = fix.error
         # avgxerror *= 0.8
         # avgyerror *= 0.8
@@ -524,7 +554,7 @@ if __name__ == '__main__':
             with open(latlon_file, 'rb') as file:
               oldlat, oldlon = pickle.load(file)
             print(oldlat, oldlon)
-            distance = calcDistance(lat, lon, oldlat, oldlon)
+            distance = calc_distance(lat, lon, oldlat, oldlon)
             bearing = calc_bearing(lat, lon, oldlat, oldlon)
             print("Old Latitude", oldlat, "and Longitude", oldlon, "is", distance, "feet from current location and bearing", bearing, "deg true")
             use_old = input('Reuse old reference point? y/N')
@@ -546,13 +576,13 @@ if __name__ == '__main__':
           refset = True
         if not adistset:
           print('\nCenter in decimal degrees is: lat=', lat, ' lon=', lon, ' with speed=', speed, 'm/s', time.strftime("%D %H:%M:%S", time.localtime()))
-          adist = getradius(prompt="Enter new Alarm radius in feet (radius limit was " + str(adist) + " feet): ")
+          adist = get_radius(prompt="Enter new Alarm radius in feet (radius limit was " + str(adist) + " feet): ")
           fix = gpsd.get_current()
           adistset = True
           print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.")
           print(help_str)
         if not speed_set:
-          thresholdspeed = getradius(prompt="Enter new speed limit in m/s where 1.0 m/s is approx 2 knots (speed limit was " + str(thresholdspeed) + " m/s): ")
+          thresholdspeed = get_radius(prompt="Enter new speed limit in m/s where 1.0 m/s is approx 2 knots (speed limit was " + str(thresholdspeed) + " m/s): ")
           fix = gpsd.get_current()
           speed_set = True
           print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.")
@@ -596,7 +626,7 @@ if __name__ == '__main__':
           #   # TODO may not need the next line
           #   continue
 
-        distance = calcDistance(reflat, reflon, lat, lon)
+        distance = calc_distance(reflat, reflon, lat, lon)
         bearing = calc_bearing(lat, lon, reflat, reflon)
         if math.isnan(distance) or speed > avgspeed + maxaccel:
           print("bad distance", distance, "with speed", speed, "m/s and acceleration", speed - avgspeed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
@@ -660,14 +690,14 @@ if __name__ == '__main__':
           aset = False
 
       if extended_output:
-        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.1f mps/%.1f maxmps/%.1f errmps: filtered=%.1f mps/%.1f maxmps/%.1f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft       ' % (aset,  acount, distance, bearing, mrawdist, precision[0] * feet_per_meter, avgdist, mdist, adist - pos_error, speed, mrawspeed, fix_error['s'], avgspeed, maxspeed, thresholdspeed, icount, runcount, fix.sats_valid, fix.sats, pos_error))
+        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.1f mps/%.1f maxmps/%.1f errmps: filtered=%.1f mps/%.1f maxmps/%.1f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (aset,  acount, distance, bearing, mrawdist, precision[0] * feet_per_meter, avgdist, mdist, adist - pos_error, speed, mrawspeed, fix_error['s'], avgspeed, maxspeed, thresholdspeed, icount, runcount, fix.sats_valid, fix.sats, pos_error, maxerror))
       # sys.stdout.write('\rAlarm=%d: Cnt=%d: RawRad/mx=%d/%dfeet: SmRad/mx/lmt=%d/%d/%dft: RawSpd/mx=%.1f/%.1fm/s: SmSpd/mx/lmt=%.1f/%.1f/%.1fm/s: Trk/avg=%.1f/%.1fD: Ivd=%d/%d   ' % (aset,  acount, distance, mrawdist, avgdist, mdist, adist, speed, mrawspeed, avgspeed, maxspeed, thresholdspeed, track, avgtrack, icount, runcount))
       else:
         sys.stdout.write(
-          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft:: Speed=%.1fmps/%.1falarm-mps %.1fmax-mps %.1ferr-mps:: Ivld=%d/%d:: sats=%d/%d::       ' % (
-          aset, acount, avgdist, adist - pos_error, bearing, mdist, pos_error, avgspeed, thresholdspeed, maxspeed, fix_error['s'], icount, runcount, fix.sats_valid, fix.sats))
+          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.1fmps/%.1falarm-mps %.1fmax-mps %.1ferr-mps:: Ivld=%d/%d:: sats=%d/%d::       ' % (
+          aset, acount, avgdist, adist - pos_error, bearing, mdist, pos_error, maxerror, avgspeed, thresholdspeed, maxspeed, fix_error['s'], icount, runcount, fix.sats_valid, fix.sats))
       sys.stdout.flush()  # to clear when using \r
-      menu = nonBlockingRawInput('')
+      menu = non_blocking_raw_Input('')
       if menu == 'q':
         break
       elif menu == 'h':
@@ -676,6 +706,37 @@ if __name__ == '__main__':
         adistset = False
       elif menu == 's':
         speed_set = False
+      elif menu == 'c':
+        print("Change center location")
+        templat = get_dd_lat(prompt="Enter new lat in DD to replace current of " + str(reflat) + ": ")
+        templon = get_dd_lon(prompt="Enter new lon in DD to replace current of " + str(reflon) + ": ")
+
+        degrees, minutes, seconds = decdeg2dms(templat)
+        print("Entered Latitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (
+          templat, degrees, minutes, seconds, degrees, minutes + seconds / 60))
+        degrees, minutes, seconds = decdeg2dms(templon)
+        print("Entered Longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (
+          templon, degrees, minutes, seconds, degrees, minutes + seconds / 60))
+        distance = calc_distance(lat, lon, templat, templon)
+        bearing = calc_bearing(lat, lon, templat, templon)
+        print("Entered center is", distance, "feet from current location and bearing", bearing, "deg true")
+        use_new = input('Use new reference point? y/N')
+        # print("You entered:", use_new)
+        if use_new == 'y':
+          print("Using new reference point")
+          reflat = templat
+          reflon = templon
+          # print("WARNING LATLON FILE SAVE DISABLED")
+          with open(latlon_file, 'wb') as file:
+            pickle.dump([reflat, reflon], file)
+        else:
+          print("Keeping previous center point")
+        fix = gpsd.get_current()
+      elif menu == 'p':
+        print("Pausing alarm")
+        pause_count = pause_interval
+        usb_buzzer_off()
+        buzzer_on = False
       elif menu == 'x':
         if extended_output:
           extended_output = False
@@ -686,7 +747,8 @@ if __name__ == '__main__':
         print("\nCenter latitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflat, degrees, minutes, seconds, degrees, minutes + seconds/60))
         degrees, minutes, seconds = decdeg2dms(reflon)
         print("Center longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflon, degrees, minutes, seconds, degrees, minutes + seconds/60))
-        print("Center bearing from current position is %03.1f degrees True and distance is %d feet at %s" % (bearing, distance, time.strftime("%D %H:%M:%S", time.localtime())))
+        print("Center bearing from current position is %03.1f degrees True, distance is %d feet and height is %0.1f feet at %s" % (bearing, distance, fix.alt * feet_per_meter, time.strftime("%D %H:%M:%S", time.localtime())))
+        fix = gpsd.get_current()
       elif menu == 't':
         aset = True
         print("\nTesting alarm")
@@ -697,6 +759,7 @@ if __name__ == '__main__':
         usb_light_on()
         usb_buzzer_once(1.0)
         usb_buzzer_light_off()
+        fix = gpsd.get_current()
       # elif menu == 'g':
       #   print("Restarting GPS poller on demand at", time.strftime("%D %H:%M:%S", time.localtime()))
       #   gpsp.running = False
