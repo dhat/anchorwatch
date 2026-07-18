@@ -1,7 +1,7 @@
 #! /usr/bin/python
 #
 # GPS anchor watch (originally only for use on Nokia n810)
-# Modified from Python tutorial docs 
+# Modified from Python tutorial docs
 # by David Hattery
 # on 5/18/2011
 #
@@ -41,6 +41,14 @@
 #   Add ability to enter custom lat lon
 #   Added altitude to menu a option
 #   Track and show max avg position errors
+# Last updated on 20260718:
+#   Extracted the distance/bearing math (geo.py) and the drag-alarm decision
+#   logic (alarm_state.py) out of this loop into their own modules with unit
+#   tests, so the safety-critical alarm decision can be verified without a
+#   live GPS/serial rig. Behavior of this script is intended to be unchanged.
+#   Fixed a latent crash: if the very first fix after startup came back
+#   invalid, fix_error/precision were referenced in the status line before
+#   ever being assigned.
 #
 # Operation:
 # Uses first position as reference unless choosing to input from file or can now accept lat/lon too--saves reference location in file for reuse on next startup of the program.
@@ -92,7 +100,6 @@
 
 import os
 import gpsd
-from haversine import haversine, Unit
 from time import *
 import time
 import math
@@ -102,6 +109,9 @@ import getopt
 import signal
 import serial
 from subprocess import call
+
+from geo import calc_distance, calc_bearing, decdeg2dms
+from alarm_state import AlarmState, FEET_PER_METER
 
 osname = "hildon"
 try:
@@ -210,28 +220,6 @@ def main(argv):
 if __name__ == '__main__':
   main(sys.argv[1:])
 
-  def calc_distance(lat1, lon1, lat2, lon2):
-    point1 = (lat1, lon1)
-    point2 = (lat2, lon2)
-    return haversine(point1, point2, unit=Unit.FEET)
-
-  # OLD def calc_distance(lat1, lon1, lat2, lon2):
-    # Calculate distance between two lat lons in NM
-    # """
-    # yDistance = (lat1 - lat) * nauticalMilePerLat
-    # xDistance = (math.cos(lat1 * rad) + math.cos(lat * rad)) * (lat1 - lon) * (nauticalMilePerLongitude / 2)
-    # distance = math.sqrt(yDistance ** 2 + xDistance ** 2) * FeetPerNauticalMile
-    # return distance
-
-  def calc_bearing(lat1, lon1, lat2, lon2):
-    dlon = math.radians(lon2 - lon1)
-    y = math.sin(dlon) * math.cos(math.radians(lat2))
-    x = math.cos(math.radians(lat1)) * math.sin(math.radians(lat2)) - math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.cos(dlon)
-    cbearing = math.atan2(y, x)
-    cbearing = math.degrees(cbearing)
-    cbearing = (cbearing + 360) % 360
-    return cbearing
-
   class AlarmException(Exception):
     pass
 
@@ -327,14 +315,6 @@ if __name__ == '__main__':
       send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
       send_command(serial.Serial(buzzer_dev, baudRate), RED_OFF)
 
-  def decdeg2dms(dd):
-    is_positive = dd >= 0
-    dd = abs(dd)
-    fminutes, fseconds = divmod(dd * 3600, 60)
-    fdegrees, fminutes = divmod(fminutes, 60)
-    fdegrees = fdegrees if is_positive else -fdegrees
-    return fdegrees, fminutes, fseconds
-
 
   if osname == "linux" and os.path.exists(buzzer_dev):
     usb_buzzer_light_off()
@@ -390,7 +370,6 @@ if __name__ == '__main__':
       print('errors      ', fix.error)
       print('mode        ', fix.mode)
       # print('status      ', fix.status)
-      utc = fix.time
 
       if ignore_fix_flag and (fix.lat != 0.0 and not math.isnan(fix.lat)) and (fix.lon != 0.0 and not math.isnan(fix.lon)) and not math.isnan(fix.time):  # and fix.time != ''
         break
@@ -433,48 +412,35 @@ if __name__ == '__main__':
     print('errors      ', fix.error)
     print('mode        ', fix.mode)
     # print('status      ', fix.status)
-    utc = fix.time
 
-    nauticalMilePerLat = 60.00721
-    nauticalMilePerLongitude = 60.10793
-    feet_per_meter = 3.28084
-    rad = math.pi / 180.0
-    milesPerNauticalMile = 1.15078
-    FeetPerNauticalMile = 6015
-    icount = 0        # invalid data counter
+    feet_per_meter = FEET_PER_METER
     acount = 0        # alarm counter--number of times position is outside alarm radius
-    mdist = 0         # max distance from ref
-    mrawdist = 0
-    avgdist = 0
-    pos_error = 0
-    # avgerror = 0
-    # avgxerror = 0
-    # avgyerror = 0
     adist = 0         # user entered alarm radius
-    distance = 0      # current distance from ref
     runcount = 0      # number of gps fixes/attempts
-    aset = False      # flag for alarm state
     adata = False     # check for data update errors
     buzzer_on = False
     light_on = False
     adistset = False  # flag for alarm radius set
     refset = False    # flag for reference lat/long set
     speed_set = True  # flag for setting speed
-    iseq = 0          # number of sequential invalid data sets
     pause_interval = 15  # duration of alarm pause
     pause_count = 0   # tracks duration
-    speed = 0.0       # speed in m/s
-    maxspeed = 0.0    # max speed while at anchor
-    maxerror = 0.0    # track max position error
-    avgspeed = 0.0
-    mrawspeed = 0.0
-    track = 0.0
-    avgtrack = 0.0
     extended_output = False  # default display option
     lat = 0       # to ensure a value is set
     lon = 0       # to ensure a value is set
     reflat = 0    # to ensure a value is set
     reflon = 0    # to ensure a value is set
+    # Defaults so the status line can't crash if the very first fix in the
+    # loop below comes back invalid before these are ever assigned from a fix.
+    precision = (0.0, 0.0)
+    fix_error = {'x': 0.0, 'y': 0.0, 'v': 0.0, 's': 0.0}
+
+    # The drag-alarm decision logic (smoothing, radius/speed checks, bad-data
+    # handling) lives in alarm_state.AlarmState -- see that module for the
+    # unit-tested behavior. This loop just feeds it fixes and reacts to the
+    # events it reports (alarm triggered/cleared, bad data, etc).
+    alarm = AlarmState(thresholdspeed, maxaccel, min_sats, ignore_fix_flag)
+
     help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'c<enter>\' to change circle center lat/lon, \'a<enter>\' to show anchor position, \'s<enter>\' to change speed limit, \'x<enter>\' to toggle short and long output formats, \'p<enter>\' to temporarily pause alarm, \'t<enter>\' to test alarm or \'q<enter>\' to quit the program."
 
     # This is to prevent the next fix from having the same time and triggering an invalid gps data warning
@@ -489,16 +455,16 @@ if __name__ == '__main__':
       if pause_count > 0:
         pause_count -= 1
       if osname == "hildon":
-        if aset and pause_count == 0:
+        if alarm.aset and pause_count == 0:
           hildon.hildon_play_system_sound("/usr/share/sounds/ui-general_warning.wav")
         # if iseq > maxiseq: hildon.hildon_play_system_sound("/usr/share/sounds/ui-general_warning.wav")
         # if iseq > maxiseq: hildon.hildon_play_system_sound("/usr/share/sounds/ui-default_beep.wav")
-        if iseq > maxiseq:
+        if alarm.iseq > maxiseq:
           hildon.hildon_play_system_sound("/usr/share/sounds/ui-information_note.wav")
       if osname == "linux":
         # fix these:
         # if aset: pygame.mixer.music.play()
-        if aset and pause_count == 0:
+        if alarm.aset and pause_count == 0:
           if os.path.isfile(buzzer_program_filename):
             # call(["ls", "-l"])
             call([buzzer_program_filename])
@@ -518,37 +484,24 @@ if __name__ == '__main__':
           alertSounda.play()
           alertSound.play()
 
-        if iseq > maxiseq:
-           print("Invalid gps", iseq, "times which is over threshold of", maxiseq)
+        if alarm.iseq > maxiseq:
+           print("Invalid gps", alarm.iseq, "times which is over threshold of", maxiseq)
            usb_light_on()
            usb_buzzer_once()
            sleep(1)
            usb_buzzer_light_off()
            # errorSound.play()
-     
+
       if fix.mode != 3 and not ignore_fix_flag:
-        if iseq == 0:
+        result = alarm.update(fix, reflat, reflon, adist, adata)
+        if result.invalid_fix_is_new:
           print('Invalid gps data at', time.strftime("%D %H:%M:%S", time.localtime()))
-        iseq += 1
-        icount += 1
       else:
         lat = float(fix.lat)
         lon = float(fix.lon)
         speed = fix.hspeed
-        # if "track" in fix:
-        track = fix.track
         precision = fix.position_precision()
-        pos_error *= 0.8
-        pos_error += 0.2 * precision[0] * feet_per_meter
-        if pos_error > maxerror:
-          maxerror = pos_error
         fix_error = fix.error
-        # avgxerror *= 0.8
-        # avgyerror *= 0.8
-        # avgxerror += 0.2 * fix_error['x'] * feet_per_meter
-        # avgyerror += 0.2 * fix_error['y'] * feet_per_meter
-        raw_error = (fix_error['x'] * feet_per_meter, fix_error['y'] * feet_per_meter, fix_error['v'] * feet_per_meter)
-        # pos_error = math.sqrt((avgxerror * avgxerror) + (avgyerror * avgyerror))
         if not refset:
           if os.path.exists(latlon_file):
             with open(latlon_file, 'rb') as file:
@@ -579,13 +532,13 @@ if __name__ == '__main__':
           adist = get_radius(prompt="Enter new Alarm radius in feet (radius limit was " + str(adist) + " feet): ")
           fix = gpsd.get_current()
           adistset = True
-          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.")
+          print("Radius limit", adist, "feet and speed limit", alarm.thresholdspeed, "m/s.")
           print(help_str)
         if not speed_set:
-          thresholdspeed = get_radius(prompt="Enter new speed limit in m/s where 1.0 m/s is approx 2 knots (speed limit was " + str(thresholdspeed) + " m/s): ")
+          alarm.thresholdspeed = get_radius(prompt="Enter new speed limit in m/s where 1.0 m/s is approx 2 knots (speed limit was " + str(alarm.thresholdspeed) + " m/s): ")
           fix = gpsd.get_current()
           speed_set = True
-          print("Radius limit", adist, "feet and speed limit", thresholdspeed, "m/s.")
+          print("Radius limit", adist, "feet and speed limit", alarm.thresholdspeed, "m/s.")
 
         # if len(data_log_file_pattern) > 0:
         #   # This checks the data logger file which relies on the same ground truth as the gpsd.  So a failure here
@@ -626,82 +579,45 @@ if __name__ == '__main__':
           #   # TODO may not need the next line
           #   continue
 
-        distance = calc_distance(reflat, reflon, lat, lon)
-        bearing = calc_bearing(lat, lon, reflat, reflon)
-        if math.isnan(distance) or speed > avgspeed + maxaccel:
-          print("bad distance", distance, "with speed", speed, "m/s and acceleration", speed - avgspeed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
-          distance = 0.
-          icount += 1
-          iseq += 1
-        else:
-          # print(utc, fix.time)
-          if utc == fix.time:
-            if iseq == 0:
-              print("WARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
-            icount += 1
-            iseq += 1
-          else:
-            utc = fix.time
-            if iseq > 0:
-              print("Resetting iseq from", iseq, " to 0 at", time.strftime("%D %H:%M:%S", time.localtime()))
-              usb_buzzer_light_off()
-              buzzer_on = False
-              light_on = False
-            iseq = 0
-          avgdist *= 0.8
-          avgdist += 0.2 * distance
-          if avgdist > mdist:
-            mdist = avgdist
-          if distance > mrawdist:
-            mrawdist = distance
+        old_iseq = alarm.iseq
+        result = alarm.update(fix, reflat, reflon, adist, adata)
 
-          if math.isnan(speed):
-            print("bad speed", speed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
-            speed = 0.
-            icount += 1
-            # set alarm??
-          else:
-            avgspeed *= 0.8
-            avgspeed += 0.2 * speed
-            if avgspeed > maxspeed:
-              maxspeed = avgspeed
-            if speed > mrawspeed:
-              mrawspeed = speed
-          if min_sats > fix.sats_valid:
-            print("Not enough sats tracked:", fix.sats_valid, "out of", fix.sats, "total with min sats:", min_sats, "at", time.strftime("%D %H:%M:%S", time.localtime()))
-            icount += 1
-
-        if not math.isnan(track):
-          avgtrack *= 0.8
-          avgtrack += 0.2 * track
+        if result.bad_distance:
+          print("bad distance", result.bad_distance_value, "with speed", speed, "m/s and acceleration", speed - alarm.avgspeed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
         else:
-          # We get a lot of bad tracks
-          # print("bad track", track)
-          track = avgtrack
-
-        if adata or avgdist > (adist - pos_error) or avgspeed > thresholdspeed:  # and speed is below some m/s threshold
-          aset = True
-        else:
-          if aset:
-            print("Alarm cleared at", time.strftime("%D %H:%M:%S", time.localtime()))
+          if result.stale_time and result.stale_time_is_new:
+            print("WARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+          if result.iseq_reset:
+            print("Resetting iseq from", old_iseq, " to 0 at", time.strftime("%D %H:%M:%S", time.localtime()))
             usb_buzzer_light_off()
             buzzer_on = False
             light_on = False
-          aset = False
+
+          if result.bad_speed:
+            print("bad speed", speed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+
+          if result.low_sats:
+            print("Not enough sats tracked:", fix.sats_valid, "out of", fix.sats, "total with min sats:", min_sats, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+
+        if result.alarm_cleared:
+          print("Alarm cleared at", time.strftime("%D %H:%M:%S", time.localtime()))
+          usb_buzzer_light_off()
+          buzzer_on = False
+          light_on = False
 
       if extended_output:
-        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.1f mps/%.1f maxmps/%.1f errmps: filtered=%.1f mps/%.1f maxmps/%.1f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (aset,  acount, distance, bearing, mrawdist, precision[0] * feet_per_meter, avgdist, mdist, adist - pos_error, speed, mrawspeed, fix_error['s'], avgspeed, maxspeed, thresholdspeed, icount, runcount, fix.sats_valid, fix.sats, pos_error, maxerror))
+        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.1f mps/%.1f maxmps/%.1f errmps: filtered=%.1f mps/%.1f maxmps/%.1f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, adist - alarm.pos_error, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror))
       # sys.stdout.write('\rAlarm=%d: Cnt=%d: RawRad/mx=%d/%dfeet: SmRad/mx/lmt=%d/%d/%dft: RawSpd/mx=%.1f/%.1fm/s: SmSpd/mx/lmt=%.1f/%.1f/%.1fm/s: Trk/avg=%.1f/%.1fD: Ivd=%d/%d   ' % (aset,  acount, distance, mrawdist, avgdist, mdist, adist, speed, mrawspeed, avgspeed, maxspeed, thresholdspeed, track, avgtrack, icount, runcount))
       else:
         sys.stdout.write(
           '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.1fmps/%.1falarm-mps %.1fmax-mps %.1ferr-mps:: Ivld=%d/%d:: sats=%d/%d::       ' % (
-          aset, acount, avgdist, adist - pos_error, bearing, mdist, pos_error, maxerror, avgspeed, thresholdspeed, maxspeed, fix_error['s'], icount, runcount, fix.sats_valid, fix.sats))
+          alarm.aset, acount, alarm.avgdist, adist - alarm.pos_error, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed, alarm.thresholdspeed, alarm.maxspeed, fix_error['s'], alarm.icount, runcount, fix.sats_valid, fix.sats))
       sys.stdout.flush()  # to clear when using \r
       menu = non_blocking_raw_Input('')
       if menu == 'q':
         break
       elif menu == 'h':
-        print(help_str)  
+        print(help_str)
       elif menu == 'r':
         adistset = False
       elif menu == 's':
@@ -747,10 +663,10 @@ if __name__ == '__main__':
         print("\nCenter latitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflat, degrees, minutes, seconds, degrees, minutes + seconds/60))
         degrees, minutes, seconds = decdeg2dms(reflon)
         print("Center longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflon, degrees, minutes, seconds, degrees, minutes + seconds/60))
-        print("Center bearing from current position is %03.1f degrees True, distance is %d feet and height is %0.1f feet at %s" % (bearing, distance, fix.alt * feet_per_meter, time.strftime("%D %H:%M:%S", time.localtime())))
+        print("Center bearing from current position is %03.1f degrees True, distance is %d feet and height is %0.1f feet at %s" % (alarm.bearing, alarm.distance, fix.alt * feet_per_meter, time.strftime("%D %H:%M:%S", time.localtime())))
         fix = gpsd.get_current()
       elif menu == 't':
-        aset = True
+        alarm.aset = True
         print("\nTesting alarm")
         if os.path.exists(buzzer_dev):
           print("Buzzer exists")
@@ -779,7 +695,7 @@ if __name__ == '__main__':
     if osname == "linux" and os.path.exists(buzzer_dev):
       usb_buzzer_light_off()
       serial.Serial(buzzer_dev, baudRate).close()
- 
+
   except (KeyboardInterrupt, SystemExit):  # runs if you press ctrl+c to exit
     print("\nInterrupt Killing Program...")
     run = False
@@ -796,4 +712,3 @@ if __name__ == '__main__':
       usb_light_on()
 
   print("Done.\nExiting Anchor Watch.")
-
