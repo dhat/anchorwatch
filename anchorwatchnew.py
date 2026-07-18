@@ -114,6 +114,7 @@ from geo import calc_distance, calc_bearing, decdeg2dms
 from alarm_state import AlarmState, FEET_PER_METER
 import gpsd_compat
 import nmea_gps_source
+from gpsd_source import GpsdSource
 
 # Some receiver/driver combos (confirmed with gpsd 3.25 + NMEA0183 read-only)
 # never send gpsd-py3 the per-satellite array it needs to count sats, so it
@@ -326,27 +327,22 @@ if __name__ == '__main__':
   if osname == "linux" and os.path.exists(buzzer_dev):
     usb_buzzer_light_off()
     serial.Serial(buzzer_dev, baudRate).close()
+  # gpsd (in-boat puck): wrapped in GpsdSource so a missing/dropped gpsd
+  # degrades gracefully instead of hanging or crashing -- see gpsd_source.py.
+  # Not fatal if unreachable at startup: the masthead NMEA feed may well be
+  # fine on its own, and get_current_fix() below retries gpsd automatically
+  # (throttled) whenever it's needed as a fallback.
+  gpsd_source = GpsdSource()
   try:
-    gpsd.connect()
-    packet = gpsd.get_current()
-    # print("Got packet:")
-    # print(packet)
-    # print("Position is:")
-    # print(packet.position())
-    # print(packet.lat)
-    # print(packet.lon)
-    # print(packet.alt)
-    # print(packet.time)
-    # print(packet.mode)
-    # print(packet.hadop)
+    gpsd_source.connect()
+    packet = gpsd_source.get_current()
     print(packet.error)
     print(packet.sats_valid)
     print(packet.position_precision())
-    # print("End")
     print("Connected with gpsd")
   except Exception as e:
-    print("Could not start gpsd monitor for host:", HOST, "and port:", PORT, " got exception: ", e)
-    sys.exit(2)
+    print("Could not start gpsd monitor for host:", HOST, "and port:", PORT,
+          " got exception: ", e, "-- will rely on masthead NMEA GPS only until gpsd is reachable")
 
   # Masthead GPS (6-axis motion corrected, clear view of the sky) via the raw
   # NMEA stream -- preferred over the gpsd-connected in-boat puck whenever it
@@ -379,7 +375,10 @@ if __name__ == '__main__':
     if active_gps_source != 'gpsd':
       print("Falling back to gpsd (in-boat puck) at", time.strftime("%D %H:%M:%S", time.localtime()))
       active_gps_source = 'gpsd'
-    return gpsd.get_current()
+    # GpsdSource.get_current() never raises -- a down/dropped gpsd just
+    # comes back as a mode=0 fix, which the main loop already treats as
+    # invalid GPS data (same path used for any other bad fix).
+    return gpsd_source.get_current()
 
   run = True
   try:
