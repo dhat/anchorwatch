@@ -23,10 +23,12 @@ DENSITY_CHARS = " :-=+*#%@"
 CENTER_CHAR = 'X'  # reserved for center -- never reused in the density ramp
 RADIUS_CHAR = 'o'
 ERROR_CHAR = 'e'  # worst-case position given current GPS error
+ALARM_CHAR = 'a'  # a position where the alarm was actively sounding
 CURRENT_CHAR = 'B'  # current boat position -- always drawn on top of everything else
 
 
-def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_feet=None):
+def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_feet=None,
+           alarm_points=None):
     """points: iterable of (east_feet, north_feet) offsets from center.
 
     current: the boat's current position, as an (east_feet, north_feet)
@@ -48,6 +50,12 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
     None, error_feet is None, or the boat is currently sitting exactly at
     center (no bearing to project along).
 
+    alarm_points: iterable of (east_feet, north_feet) offsets recorded at
+    every tick the alarm was actively sounding, marked with ALARM_CHAR.
+    Unlike points (a rolling recent-history window), this is meant to be
+    an unbounded, caller-managed record that persists until explicitly
+    cleared, so past alarm episodes stay visible across the session.
+
     Returns a multi-line string: a width x height character grid with the
     center marked, the current alarm radius circle overlaid, recent points
     density-shaded by how often each cell was visited, and the current
@@ -55,8 +63,9 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
     line spelling out what each marker/density character means.
     """
     points = list(points)
-    worst_case = _worst_case_point(current, error_feet)
-    half_extent = _half_extent(points, radius_feet, worst_case)
+    alarm_points = list(alarm_points) if alarm_points is not None else []
+    worst_case = worst_case_point(current, error_feet)
+    half_extent = _half_extent(points, radius_feet, worst_case, alarm_points)
 
     counts = {}
     for east, north in points:
@@ -74,6 +83,11 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
         for (row, col), count in counts.items():
             grid[row][col] = _density_char(count, max_count)
 
+    for east, north in alarm_points:
+        cell = _to_cell(east, north, half_extent, width, height)
+        if cell is not None:
+            grid[cell[0]][cell[1]] = ALARM_CHAR
+
     center_cell = _to_cell(0, 0, half_extent, width, height)
     if center_cell is not None:
         grid[center_cell[0]][center_cell[1]] = CENTER_CHAR
@@ -90,16 +104,18 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
 
     lines = [''.join(row) for row in grid]
     if error_feet is not None:
-        caption = "N up / E right -- radius=%dft, GPS error=%dft -- %d pts" % (
-            radius_feet, error_feet, len(points))
+        caption = "N up / E right -- radius=%dft, GPS error=%dft -- %d pts, %d alarm pts" % (
+            radius_feet, error_feet, len(points), len(alarm_points))
     else:
-        caption = "N up / E right -- radius=%dft -- %d pts" % (radius_feet, len(points))
-    legend = "%s=center  %s=radius  %s=worst-case (current+error)  %s=boat-now  |  density, rarely..often visited: %s" % (
-        CENTER_CHAR, RADIUS_CHAR, ERROR_CHAR, CURRENT_CHAR, DENSITY_CHARS[1:])
+        caption = "N up / E right -- radius=%dft -- %d pts, %d alarm pts" % (
+            radius_feet, len(points), len(alarm_points))
+    legend = ("%s=center  %s=radius  %s=worst-case (current+error)  %s=alarm sounded  %s=boat-now  "
+              "|  density, rarely..often visited: %s") % (
+        CENTER_CHAR, RADIUS_CHAR, ERROR_CHAR, ALARM_CHAR, CURRENT_CHAR, DENSITY_CHARS[1:])
     return '\n'.join(lines) + '\n' + caption + '\n' + legend
 
 
-def _worst_case_point(current, error_feet):
+def worst_case_point(current, error_feet):
     if current is None or error_feet is None:
         return None
     distance = math.hypot(current[0], current[1])
@@ -109,12 +125,14 @@ def _worst_case_point(current, error_feet):
     return current[0] * scale, current[1] * scale
 
 
-def _half_extent(points, radius_feet, worst_case=None):
+def _half_extent(points, radius_feet, worst_case=None, alarm_points=None):
     half_extent = radius_feet * 1.15 if radius_feet > 0 else 50.0
     for east, north in points:
         half_extent = max(half_extent, abs(east) * 1.1, abs(north) * 1.1)
     if worst_case is not None:
         half_extent = max(half_extent, abs(worst_case[0]) * 1.1, abs(worst_case[1]) * 1.1)
+    for east, north in (alarm_points or []):
+        half_extent = max(half_extent, abs(east) * 1.1, abs(north) * 1.1)
     return half_extent
 
 

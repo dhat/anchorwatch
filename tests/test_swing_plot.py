@@ -117,23 +117,23 @@ class SwingPlotTests(unittest.TestCase):
     def test_worst_case_point_is_on_the_same_bearing_past_current(self):
         # 40ft due east of center, with 10ft of error -> worst case is
         # 50ft due east: same bearing, current distance + error.
-        east, north = swing_plot._worst_case_point((40, 0), 10)
+        east, north = swing_plot.worst_case_point((40, 0), 10)
         self.assertAlmostEqual(east, 50)
         self.assertAlmostEqual(north, 0)
 
     def test_worst_case_point_is_none_when_boat_is_exactly_at_center(self):
         # No defined bearing to project the error along.
-        self.assertIsNone(swing_plot._worst_case_point((0, 0), 10))
+        self.assertIsNone(swing_plot.worst_case_point((0, 0), 10))
 
     def test_worst_case_point_is_none_without_current_or_error(self):
-        self.assertIsNone(swing_plot._worst_case_point(None, 10))
-        self.assertIsNone(swing_plot._worst_case_point((40, 0), None))
+        self.assertIsNone(swing_plot.worst_case_point(None, 10))
+        self.assertIsNone(swing_plot.worst_case_point((40, 0), None))
 
     def test_error_marker_is_drawn_at_the_worst_case_point(self):
         current = (40, 0)
         output = swing_plot.render([current], radius_feet=100, width=61, height=31,
                                     current=current, error_feet=10)
-        half_extent = swing_plot._half_extent([current], 100, swing_plot._worst_case_point(current, 10))
+        half_extent = swing_plot._half_extent([current], 100, swing_plot.worst_case_point(current, 10))
         worst_cell = swing_plot._to_cell(50, 0, half_extent, 61, 31)
         lines = output.split('\n')
         self.assertEqual(lines[worst_cell[0]][worst_cell[1]], swing_plot.ERROR_CHAR)
@@ -144,7 +144,7 @@ class SwingPlotTests(unittest.TestCase):
         current = (40, 0)
         output = swing_plot.render([current], radius_feet=100, width=41, height=21,
                                     current=current, error_feet=0)
-        half_extent = swing_plot._half_extent([current], 100, swing_plot._worst_case_point(current, 0))
+        half_extent = swing_plot._half_extent([current], 100, swing_plot.worst_case_point(current, 0))
         cell = swing_plot._to_cell(40, 0, half_extent, 41, 21)
         lines = output.split('\n')
         self.assertEqual(lines[cell[0]][cell[1]], swing_plot.CURRENT_CHAR)
@@ -161,6 +161,46 @@ class SwingPlotTests(unittest.TestCase):
                                     current=(40, 0), error_feet=35)
         legend = output.split('\n')[-1]
         self.assertIn("%s=worst-case" % swing_plot.ERROR_CHAR, legend)
+
+    def test_no_alarm_marker_when_alarm_points_not_given(self):
+        output = swing_plot.render([], radius_feet=50, width=41, height=21)
+        grid = '\n'.join(output.split('\n')[:-2])
+        self.assertNotIn(swing_plot.ALARM_CHAR, grid)
+
+    def test_alarm_points_are_marked_on_the_grid(self):
+        alarm_points = [(20, 20)]
+        output = swing_plot.render([], radius_feet=0, width=41, height=21, alarm_points=alarm_points)
+        half_extent = swing_plot._half_extent([], 0, alarm_points=alarm_points)
+        cell = swing_plot._to_cell(20, 20, half_extent, 41, 21)
+        lines = output.split('\n')
+        self.assertEqual(lines[cell[0]][cell[1]], swing_plot.ALARM_CHAR)
+
+    def test_alarm_points_do_not_require_current_history_points(self):
+        # Regression: alarm_points is a separate, caller-managed record --
+        # rendering it shouldn't depend on points (the rolling window) also
+        # containing those same positions.
+        output = swing_plot.render([], radius_feet=0, width=41, height=21, alarm_points=[(20, 20), (-20, -20)])
+        grid = '\n'.join(output.split('\n')[:-2])
+        self.assertEqual(grid.count(swing_plot.ALARM_CHAR), 2)
+
+    def test_current_marker_wins_over_alarm_marker_at_the_same_cell(self):
+        output = swing_plot.render([], radius_feet=0, width=41, height=21,
+                                    current=(20, 20), alarm_points=[(20, 20)])
+        half_extent = swing_plot._half_extent([], 0, alarm_points=[(20, 20)])
+        cell = swing_plot._to_cell(20, 20, half_extent, 41, 21)
+        lines = output.split('\n')
+        self.assertEqual(lines[cell[0]][cell[1]], swing_plot.CURRENT_CHAR)
+
+    def test_caption_reports_alarm_point_count(self):
+        output = swing_plot.render([], radius_feet=50, width=21, height=11,
+                                    alarm_points=[(1, 1), (2, 2), (3, 3)])
+        caption = output.split('\n')[-2]
+        self.assertIn("3 alarm pts", caption)
+
+    def test_legend_documents_the_alarm_marker(self):
+        output = swing_plot.render([], radius_feet=50, width=21, height=11)
+        legend = output.split('\n')[-1]
+        self.assertIn("%s=alarm sounded" % swing_plot.ALARM_CHAR, legend)
 
 
 if __name__ == '__main__':
