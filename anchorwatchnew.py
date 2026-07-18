@@ -108,13 +108,15 @@ import sys
 import getopt
 import signal
 import serial
+from collections import deque
 from subprocess import call
 
-from geo import calc_distance, calc_bearing, decdeg2dms
+from geo import calc_distance, calc_bearing, decdeg2dms, offset_from_center
 from alarm_state import AlarmState, FEET_PER_METER
 import gpsd_compat
 import nmea_gps_source
 from gpsd_source import GpsdSource
+import swing_plot
 
 # Some receiver/driver combos (confirmed with gpsd 3.25 + NMEA0183 read-only)
 # never send gpsd-py3 the per-satellite array it needs to count sats, so it
@@ -465,6 +467,7 @@ if __name__ == '__main__':
     pause_interval = 15  # duration of alarm pause
     pause_count = 0   # tracks duration
     extended_output = False  # default display option
+    show_swing_plot = False  # 'v' toggles a continuously-redrawing swing pattern view
     lat = 0       # to ensure a value is set
     lon = 0       # to ensure a value is set
     reflat = 0    # to ensure a value is set
@@ -480,7 +483,15 @@ if __name__ == '__main__':
     # events it reports (alarm triggered/cleared, bad data, etc).
     alarm = AlarmState(thresholdspeed, maxaccel, min_sats, ignore_fix_flag)
 
-    help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'c<enter>\' to change circle center lat/lon, \'a<enter>\' to show anchor position, \'s<enter>\' to change speed limit, \'x<enter>\' to toggle short and long output formats, \'p<enter>\' to temporarily pause alarm, \'t<enter>\' to test alarm or \'q<enter>\' to quit the program."
+    # Recent (east_feet, north_feet) offsets from center, for the 'v' swing-
+    # pattern view -- see swing_plot.py. A real drag tends to show up here as
+    # points clustering in an arc and walking outward, often before the
+    # alarm radius itself is crossed. Capped by maxlen rather than a time
+    # window for simplicity; at the ~2-4s loop cadence that's roughly the
+    # last 10-20 minutes.
+    position_history = deque(maxlen=300)
+
+    help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'c<enter>\' to change circle center lat/lon, \'a<enter>\' to show anchor position, \'s<enter>\' to change speed limit, \'x<enter>\' to toggle short and long output formats, \'p<enter>\' to temporarily pause alarm, \'v<enter>\' to toggle a live view of the recent swing pattern, \'t<enter>\' to test alarm or \'q<enter>\' to quit the program."
 
     # This is to prevent the next fix from having the same time and triggering an invalid gps data warning
     sleep(2)
@@ -624,6 +635,7 @@ if __name__ == '__main__':
         if result.bad_distance:
           print("bad distance", result.bad_distance_value, "with speed", speed, "m/s and acceleration", speed - alarm.avgspeed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
         else:
+          position_history.append(offset_from_center(reflat, reflon, lat, lon))
           if result.stale_time and result.stale_time_is_new:
             print("WARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
           if result.iseq_reset:
@@ -643,6 +655,16 @@ if __name__ == '__main__':
           usb_buzzer_light_off()
           buzzer_on = False
           light_on = False
+
+      if show_swing_plot:
+        # Clear + redraw in place each tick, like a live radar sweep. This
+        # also clears away any messages printed above (alarm triggered,
+        # invalid gps, etc.) -- the buzzer/light alarm is still the primary
+        # alert while this view is active, not the on-screen text.
+        sys.stdout.write('\033[2J\033[H')
+        current_offset = position_history[-1] if position_history else None
+        sys.stdout.write(swing_plot.render(position_history, adist, current=current_offset))
+        sys.stdout.write('\n\n')
 
       if extended_output:
         sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.1f mps/%.1f maxmps/%.1f errmps: filtered=%.1f mps/%.1f maxmps/%.1f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, adist - alarm.pos_error, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror))
@@ -704,6 +726,8 @@ if __name__ == '__main__':
         print("Center longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflon, degrees, minutes, seconds, degrees, minutes + seconds/60))
         print("Center bearing from current position is %03.1f degrees True, distance is %d feet and height is %0.1f feet at %s" % (alarm.bearing, alarm.distance, fix.alt * feet_per_meter, time.strftime("%D %H:%M:%S", time.localtime())))
         fix = get_current_fix()
+      elif menu == 'v':
+        show_swing_plot = not show_swing_plot
       elif menu == 't':
         alarm.aset = True
         print("\nTesting alarm")

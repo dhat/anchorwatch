@@ -28,3 +28,16 @@ def decdeg2dms(dd):
     fdegrees, fminutes = divmod(fminutes, 60)
     fdegrees = fdegrees if is_positive else -fdegrees
     return fdegrees, fminutes, fseconds
+
+
+def offset_from_center(center_lat, center_lon, lat, lon):
+    """(east_feet, north_feet) offset of (lat, lon) from the center point.
+
+    Used for the swing-pattern plot: a plain local-tangent-plane offset is
+    easier to plot on a grid than raw distance+bearing.
+    """
+    distance = calc_distance(center_lat, center_lon, lat, lon)
+    bearing = math.radians(calc_bearing(center_lat, center_lon, lat, lon))
+    east = distance * math.sin(bearing)
+    north = distance * math.cos(bearing)
+    return east, north

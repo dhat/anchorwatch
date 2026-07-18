@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from geo import calc_distance, calc_bearing, decdeg2dms
+from geo import calc_distance, calc_bearing, decdeg2dms, offset_from_center
 
 
 class GeoTests(unittest.TestCase):
@@ -44,6 +44,25 @@ class GeoTests(unittest.TestCase):
         degrees, minutes, seconds = decdeg2dms(-70.25)
         self.assertEqual(degrees, -70)
         self.assertEqual(minutes, 15)
+
+    def test_offset_from_center_at_center_is_zero(self):
+        east, north = offset_from_center(42.0, -70.0, 42.0, -70.0)
+        self.assertAlmostEqual(east, 0.0)
+        self.assertAlmostEqual(north, 0.0)
+
+    def test_offset_from_center_due_north_is_positive_north_zero_east(self):
+        east, north = offset_from_center(0.0, 0.0, 0.001, 0.0)
+        self.assertAlmostEqual(east, 0.0, delta=1e-6)
+        self.assertGreater(north, 0.0)
+
+    def test_offset_from_center_due_east_is_positive_east_zero_north(self):
+        east, north = offset_from_center(0.0, 0.0, 0.0, 0.001)
+        self.assertGreater(east, 0.0)
+        self.assertAlmostEqual(north, 0.0, delta=1e-6)
+
+    def test_offset_from_center_due_south_is_negative_north(self):
+        east, north = offset_from_center(0.001, 0.0, 0.0, 0.0)
+        self.assertLess(north, 0.0)
 
 
 if __name__ == '__main__':
