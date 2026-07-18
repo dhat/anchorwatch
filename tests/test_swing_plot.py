@@ -202,6 +202,32 @@ class SwingPlotTests(unittest.TestCase):
         legend = output.split('\n')[-1]
         self.assertIn("%s=alarm sounded" % swing_plot.ALARM_CHAR, legend)
 
+    def test_no_speed_alarm_marker_when_not_given(self):
+        output = swing_plot.render([], radius_feet=50, width=41, height=21)
+        grid = '\n'.join(output.split('\n')[:-2])
+        self.assertNotIn(swing_plot.SPEED_ALARM_CHAR, grid)
+
+    def test_speed_alarm_points_are_marked_distinctly_from_distance_alarm_points(self):
+        output = swing_plot.render([], radius_feet=0, width=41, height=21,
+                                    alarm_points=[(20, 20)], speed_alarm_points=[(-20, -20)])
+        half_extent = swing_plot._half_extent([], 0, alarm_points=[(20, 20), (-20, -20)])
+        distance_cell = swing_plot._to_cell(20, 20, half_extent, 41, 21)
+        speed_cell = swing_plot._to_cell(-20, -20, half_extent, 41, 21)
+        lines = output.split('\n')
+        self.assertEqual(lines[distance_cell[0]][distance_cell[1]], swing_plot.ALARM_CHAR)
+        self.assertEqual(lines[speed_cell[0]][speed_cell[1]], swing_plot.SPEED_ALARM_CHAR)
+
+    def test_caption_reports_speed_alarm_point_count(self):
+        output = swing_plot.render([], radius_feet=50, width=21, height=11,
+                                    speed_alarm_points=[(1, 1), (2, 2)])
+        caption = output.split('\n')[-2]
+        self.assertIn("2 speed-alarm pts", caption)
+
+    def test_legend_documents_the_speed_alarm_marker(self):
+        output = swing_plot.render([], radius_feet=50, width=21, height=11)
+        legend = output.split('\n')[-1]
+        self.assertIn("%s=alarm sounded (speed)" % swing_plot.SPEED_ALARM_CHAR, legend)
+
 
 if __name__ == '__main__':
     unittest.main()

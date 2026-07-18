@@ -9,6 +9,12 @@ GGA_GOOD = "$GPGGA,190001,4200.0000,N,07000.0000,W,1,09,0.9,23.0,M,-33.4,M,,*40"
 RMC_GOOD = "$GPRMC,190001,A,4200.0000,N,07000.0000,W,000.1,151.0,180726,,,A*64"
 GSA_3D = "$GPGSA,A,3,04,05,09,12,15,18,21,24,,,,,1.8,0.9,1.6*36"
 GGA_NO_FIX = "$GPGGA,190002,,,,,0,00,,,M,,M,,*6C"
+# Real sentence shape from the boat's actual masthead multiplexer, which
+# (confirmed by capturing the live feed) never sends RMC at all -- only
+# GGA/GSA-less position sentences plus VTG for speed/track.
+VTG_GOOD = "$GPVTG,164.7,T,153.2,M,5.5,N,10.2,K,D*14"
+VTG_NOT_VALID = "$GPVTG,164.7,T,153.2,M,0.0,N,0.0,K,N*2D"
+VTG_LEGACY_NO_MODE = "$GPVTG,164.7,T,153.2,M,3.0,N,5.6,K*4F"
 
 
 def _free_port():
@@ -61,6 +67,34 @@ class NmeaGpsSourceTests(unittest.TestCase):
         self.assertAlmostEqual(fix.hspeed, 0.1 * 0.514444, places=5)
         self.assertAlmostEqual(fix.track, 151.0)
 
+    def test_vtg_supplies_speed_and_track(self):
+        # Regression test: this boat's actual masthead feed never sends
+        # RMC, only VTG, so speed/track used to silently stay at 0.
+        source = NmeaGpsSource()
+        source.ingest_line(GGA_GOOD)
+        source.ingest_line(VTG_GOOD)
+        fix = source._build_fix()
+        self.assertAlmostEqual(fix.hspeed, 5.5 * 0.514444, places=5)
+        self.assertAlmostEqual(fix.track, 164.7)
+
+    def test_vtg_with_not_valid_mode_indicator_is_ignored(self):
+        source = NmeaGpsSource()
+        source.ingest_line(GGA_GOOD)
+        source.ingest_line(VTG_NOT_VALID)
+        fix = source._build_fix()
+        self.assertEqual(fix.hspeed, 0.0)
+        self.assertEqual(fix.track, 0.0)
+
+    def test_legacy_vtg_without_mode_indicator_is_still_accepted(self):
+        # Pre-NMEA-2.3 VTG sentences don't have the mode indicator field at
+        # all -- that should be treated as valid, not rejected.
+        source = NmeaGpsSource()
+        source.ingest_line(GGA_GOOD)
+        source.ingest_line(VTG_LEGACY_NO_MODE)
+        fix = source._build_fix()
+        self.assertAlmostEqual(fix.hspeed, 3.0 * 0.514444, places=5)
+        self.assertAlmostEqual(fix.track, 164.7)
+
     def test_no_fix_gga_sets_mode_to_1_and_keeps_last_good_position(self):
         source = NmeaGpsSource()
         source.ingest_line(GGA_GOOD)
@@ -90,6 +124,15 @@ class NmeaGpsSourceTests(unittest.TestCase):
         x_err, v_err = fix.position_precision()
         self.assertAlmostEqual(x_err, 0.9 * 5.0)
         self.assertAlmostEqual(v_err, 1.6 * 5.0)
+
+    def test_hdop_feeds_speed_error_estimate(self):
+        # NMEA has no speed-error sentence at all, so this is a heuristic
+        # scaled by HDOP the same way position error is -- but it should at
+        # least respond to HDOP rather than being a fixed constant.
+        source = NmeaGpsSource()
+        source.ingest_line(GGA_GOOD)  # horizontal_dil = 0.9
+        fix = source._build_fix()
+        self.assertAlmostEqual(fix.error['s'], 0.9 * 0.5)
 
     def test_becomes_stale_after_timeout_even_with_prior_good_data(self):
         source = NmeaGpsSource(host='127.0.0.1', port=_free_port(), stale_after=0.01)

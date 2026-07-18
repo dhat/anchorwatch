@@ -37,6 +37,8 @@ class AlarmStateTests(unittest.TestCase):
         self.assertFalse(state.aset)
         self.assertFalse(result.alarm_triggered)
         self.assertEqual(state.icount, 0)
+        self.assertFalse(state.triggered_by_distance)
+        self.assertFalse(state.triggered_by_speed)
 
     def test_drifting_past_radius_triggers_alarm(self):
         state = self.make_state()
@@ -45,6 +47,8 @@ class AlarmStateTests(unittest.TestCase):
         result = state.update(fix, REF_LAT, REF_LON, adist=50)
         self.assertTrue(state.aset)
         self.assertTrue(result.alarm_triggered)
+        self.assertTrue(state.triggered_by_distance)
+        self.assertFalse(state.triggered_by_speed)
 
     def test_alarm_clears_once_back_inside_radius(self):
         state = self.make_state()
@@ -75,6 +79,8 @@ class AlarmStateTests(unittest.TestCase):
             fix.time = f"t{i + 1}"
             state.update(fix, REF_LAT, REF_LON, adist=500)
         self.assertTrue(state.aset)
+        self.assertTrue(state.triggered_by_speed)
+        self.assertFalse(state.triggered_by_distance)
 
     def test_invalid_fix_mode_counts_as_bad_data_and_does_not_crash(self):
         state = self.make_state()

@@ -440,11 +440,13 @@ if __name__ == '__main__':
     # last 10-20 minutes.
     position_history = deque(maxlen=300)
 
-    # Offsets recorded every tick the alarm was actively sounding. Unlike
-    # position_history this is unbounded and never rolls off on its own --
-    # it's a record of past alarm episodes the user explicitly asked to be
-    # able to review across the whole session, cleared only on demand ('z').
-    alarm_points = []
+    # Offsets recorded every tick the alarm was actively sounding, split by
+    # which condition triggered it. Unlike position_history these are
+    # unbounded and never roll off on their own -- a record of past alarm
+    # episodes the user explicitly asked to be able to review across the
+    # whole session, cleared only on demand ('z').
+    alarm_points = []        # distance-triggered (worst-case, error-adjusted)
+    speed_alarm_points = []  # speed-triggered (raw current position)
 
     help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'c<enter>\' to change circle center lat/lon, \'a<enter>\' to show anchor position, \'s<enter>\' to change speed limit, \'x<enter>\' to toggle short and long output formats, \'p<enter>\' to temporarily pause alarm, \'v<enter>\' to toggle a live view of the recent swing pattern, \'z<enter>\' to clear recorded alarm positions, \'t<enter>\' to test alarm or \'q<enter>\' to quit the program."
 
@@ -592,13 +594,19 @@ if __name__ == '__main__':
         else:
           current_offset_this_tick = offset_from_center(reflat, reflon, lat, lon)
           position_history.append(current_offset_this_tick)
-          if alarm.aset:
+          if alarm.triggered_by_distance or adata:
             # Record the worst-case (error-inclusive) position, not the raw
-            # one -- that's what the alarm decision itself is actually based
-            # on (avgdist compared against the error-shrunk radius), so it's
-            # the more honest place to mark "the alarm sounded here".
+            # one -- that's what the distance side of the alarm decision is
+            # actually based on (avgdist compared against the error-shrunk
+            # radius), so it's the more honest place to mark "the alarm
+            # sounded here".
             worst_case_this_tick = swing_plot.worst_case_point(current_offset_this_tick, alarm.pos_error)
             alarm_points.append(worst_case_this_tick if worst_case_this_tick is not None else current_offset_this_tick)
+          if alarm.triggered_by_speed:
+            # Speed has no "worst case, given GPS error" spatial adjustment
+            # the way distance does -- the raw current position is the
+            # right thing to mark here.
+            speed_alarm_points.append(current_offset_this_tick)
           if result.stale_time and result.stale_time_is_new:
             print("WARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
           if result.iseq_reset:
@@ -628,7 +636,7 @@ if __name__ == '__main__':
         current_offset = position_history[-1] if position_history else None
         sys.stdout.write(swing_plot.render(
             position_history, adist, current=current_offset, error_feet=alarm.pos_error,
-            alarm_points=alarm_points))
+            alarm_points=alarm_points, speed_alarm_points=speed_alarm_points))
         sys.stdout.write('\n\n')
 
       if extended_output:
@@ -694,8 +702,10 @@ if __name__ == '__main__':
       elif menu == 'v':
         show_swing_plot = not show_swing_plot
       elif menu == 'z':
-        print("Clearing", len(alarm_points), "recorded alarm position(s)")
+        print("Clearing", len(alarm_points), "distance-alarm and", len(speed_alarm_points),
+              "speed-alarm recorded position(s)")
         alarm_points.clear()
+        speed_alarm_points.clear()
       elif menu == 't':
         alarm.aset = True
         print("\nTesting alarm")

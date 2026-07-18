@@ -58,6 +58,8 @@ class AlarmState:
         self.speed = 0.0         # current raw speed
         self.effective_radius = 0.0  # adist shrunk by pos_error, floored at 0
         self.aset = False        # is the drag alarm currently active
+        self.triggered_by_distance = False  # avgdist alone exceeded effective_radius this tick
+        self.triggered_by_speed = False      # avgspeed alone exceeded thresholdspeed this tick
         self.utc = None          # last-seen gpsd fix time, to detect a stalled feed
 
     def update(self, fix, reflat, reflon, adist, adata=False):
@@ -141,10 +143,11 @@ class AlarmState:
         # distance from center), not permanently stuck on.
         self.effective_radius = max(0.0, adist - self.pos_error)
 
+        self.triggered_by_distance = self.avgdist > self.effective_radius
+        self.triggered_by_speed = self.avgspeed > self.thresholdspeed
+
         was_set = self.aset
-        self.aset = bool(
-            adata or self.avgdist > self.effective_radius or self.avgspeed > self.thresholdspeed
-        )
+        self.aset = bool(adata or self.triggered_by_distance or self.triggered_by_speed)
         result.alarm_triggered = self.aset and not was_set
         result.alarm_cleared = was_set and not self.aset
 

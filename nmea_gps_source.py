@@ -11,15 +11,24 @@ retries automatically -- see NmeaGpsSource's docstring -- so a transient
 outage during an unattended overnight anchor watch doesn't permanently
 strand the program on the less accurate puck.
 
-Only GGA, RMC and GSA sentences are used:
+GGA, RMC, GSA and VTG sentences are used:
   GGA gives fix quality, lat/lon, satellite count, HDOP, altitude, time.
   RMC gives speed over ground and course, plus an independent A/V validity
     check.
   GSA gives fix dimensionality (2D/3D) and VDOP, and a satellite-used count
     as a fallback if a GGA hasn't arrived yet this cycle.
-There's no GST sentence assumed available, so horizontal/vertical error
-estimates are approximated from HDOP/VDOP using a typical single-frequency
-GPS accuracy figure rather than a measured value.
+  VTG also gives speed over ground and course. Some multiplexers (this
+    boat's masthead unit among them) never emit RMC at all -- only GGA,
+    GSA/GSV-less position sentences, and VTG for speed/track -- so relying
+    on RMC alone silently left speed stuck at 0 on that feed. Whichever of
+    RMC/VTG is actually present updates speed/track; if both arrive, the
+    most recent one wins, same as every other field here.
+There's no GST sentence assumed available, so horizontal/vertical position
+error estimates are approximated from HDOP/VDOP using a typical single-
+frequency GPS accuracy figure rather than a measured value. NMEA has no
+standard speed-error sentence at all (gpsd's eps is derived internally,
+not read off the wire), so speed error is approximated the same way,
+scaled by HDOP.
 """
 import socket
 import time as time_module
@@ -47,6 +56,11 @@ CONNECT_TIMEOUT = 5.0
 # used to turn a DOP value into an epx/epy/epv-style estimate when the
 # stream has no GST sentence to give a measured accuracy figure directly.
 DEFAULT_UERE_METERS = 5.0
+
+# Rough single-frequency GPS speed accuracy, in m/s, at HDOP=1 -- there's no
+# NMEA sentence for this at all, so it's approximated the same way position
+# error is: scaled by HDOP as a stand-in for "how good is the fix right now".
+DEFAULT_SPEED_UERE_MPS = 0.5
 
 KNOTS_TO_MPS = 0.514444
 
@@ -115,6 +129,8 @@ class NmeaGpsSource:
             self._ingest_rmc(msg)
         elif sentence == 'GSA':
             self._ingest_gsa(msg)
+        elif sentence == 'VTG':
+            self._ingest_vtg(msg)
         else:
             return
         self._last_sentence_at = time_module.monotonic()
@@ -145,6 +161,17 @@ class NmeaGpsSource:
                 self._speed_mps = msg.spd_over_grnd * KNOTS_TO_MPS
             if msg.true_course is not None:
                 self._track = msg.true_course
+
+    def _ingest_vtg(self, msg):
+        # faa_mode is a NMEA 2.3+ addition: 'N' means "not valid", blank/
+        # absent means the sentence predates that field (treat as valid,
+        # same as the rest of this pre-2.3-friendly parser).
+        if getattr(msg, 'faa_mode', None) == 'N':
+            return
+        if msg.spd_over_grnd_kts is not None:
+            self._speed_mps = float(msg.spd_over_grnd_kts) * KNOTS_TO_MPS
+        if msg.true_track is not None:
+            self._track = msg.true_track
 
     def _ingest_gsa(self, msg):
         if msg.mode_fix_type:
@@ -231,6 +258,7 @@ class NmeaGpsSource:
 
         epx = self._hdop * DEFAULT_UERE_METERS if self._hdop else 10.0
         epv = self._vdop * DEFAULT_UERE_METERS if self._vdop else epx * 1.5
-        fix.error = {'x': epx, 'y': epx, 'v': epv, 's': 0.5, 'c': 0.0, 't': 0.01}
+        eps = self._hdop * DEFAULT_SPEED_UERE_MPS if self._hdop else DEFAULT_SPEED_UERE_MPS * 2
+        fix.error = {'x': epx, 'y': epx, 'v': epv, 's': eps, 'c': 0.0, 't': 0.01}
 
         return fix
