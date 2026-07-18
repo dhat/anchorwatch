@@ -112,6 +112,12 @@ from subprocess import call
 
 from geo import calc_distance, calc_bearing, decdeg2dms
 from alarm_state import AlarmState, FEET_PER_METER
+import gpsd_compat
+
+# Some receiver/driver combos (confirmed with gpsd 3.25 + NMEA0183 read-only)
+# never send gpsd-py3 the per-satellite array it needs to count sats, so it
+# silently reports sats=sats_valid=0. See gpsd_compat.py for the full story.
+gpsd_compat.patch_satellite_counts()
 
 osname = "hildon"
 try:
