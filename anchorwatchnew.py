@@ -640,11 +640,11 @@ if __name__ == '__main__':
         sys.stdout.write('\n\n')
 
       if extended_output:
-        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.1f mps/%.1f maxmps/%.1f errmps: filtered=%.1f mps/%.1f maxmps/%.1f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror))
+        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.2f mps/%.2f maxmps/%.2f errmps: filtered=%.2f mps/%.2f maxmps/%.2f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror))
       # sys.stdout.write('\rAlarm=%d: Cnt=%d: RawRad/mx=%d/%dfeet: SmRad/mx/lmt=%d/%d/%dft: RawSpd/mx=%.1f/%.1fm/s: SmSpd/mx/lmt=%.1f/%.1f/%.1fm/s: Trk/avg=%.1f/%.1fD: Ivd=%d/%d   ' % (aset,  acount, distance, mrawdist, avgdist, mdist, adist, speed, mrawspeed, avgspeed, maxspeed, thresholdspeed, track, avgtrack, icount, runcount))
       else:
         sys.stdout.write(
-          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.1fmps/%.1falarm-mps %.1fmax-mps %.1ferr-mps:: Ivld=%d/%d:: sats=%d/%d::       ' % (
+          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.2fmps/%.2falarm-mps %.2fmax-mps %.2ferr-mps:: Ivld=%d/%d:: sats=%d/%d::       ' % (
           alarm.aset, acount, alarm.avgdist, alarm.effective_radius, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed, alarm.thresholdspeed, alarm.maxspeed, fix_error['s'], alarm.icount, runcount, fix.sats_valid, fix.sats))
       sys.stdout.flush()  # to clear when using \r
       menu = non_blocking_raw_Input('')
