@@ -5,3 +5,4 @@ pygame
 pyserial
 #==3.5
 haversine
+pynmea2

@@ -113,6 +113,7 @@ from subprocess import call
 from geo import calc_distance, calc_bearing, decdeg2dms
 from alarm_state import AlarmState, FEET_PER_METER
 import gpsd_compat
+import nmea_gps_source
 
 # Some receiver/driver combos (confirmed with gpsd 3.25 + NMEA0183 read-only)
 # never send gpsd-py3 the per-satellite array it needs to count sats, so it
@@ -347,15 +348,48 @@ if __name__ == '__main__':
     print("Could not start gpsd monitor for host:", HOST, "and port:", PORT, " got exception: ", e)
     sys.exit(2)
 
+  # Masthead GPS (6-axis motion corrected, clear view of the sky) via the raw
+  # NMEA stream -- preferred over the gpsd-connected in-boat puck whenever it
+  # has a current 3D fix. Not fatal if unreachable at startup: get_current_fix()
+  # below just falls back to gpsd every tick, same as if the masthead feed
+  # drops out mid-session.
+  nmea_source = nmea_gps_source.NmeaGpsSource()
+  try:
+    nmea_source.connect()
+    print("Connected to masthead NMEA stream at", nmea_source.host, ":", nmea_source.port)
+  except Exception as e:
+    print("Could not connect to masthead NMEA stream (will rely on gpsd only):", e)
+
+  active_gps_source = 'gpsd'  # which source supplied the last fix, for transition logging
+
+  def get_current_fix():
+    global active_gps_source
+    nmea_fix = None
+    try:
+      nmea_fix = nmea_source.get_current()
+    except Exception as e:
+      print("Masthead NMEA read failed, falling back to gpsd:", e)
+
+    if nmea_fix is not None and nmea_fix.mode == 3:
+      if active_gps_source != 'nmea':
+        print("Using masthead NMEA GPS at", time.strftime("%D %H:%M:%S", time.localtime()))
+        active_gps_source = 'nmea'
+      return nmea_fix
+
+    if active_gps_source != 'gpsd':
+      print("Falling back to gpsd (in-boat puck) at", time.strftime("%D %H:%M:%S", time.localtime()))
+      active_gps_source = 'gpsd'
+    return gpsd.get_current()
+
   run = True
   try:
-    fix = gpsd.get_current()
+    fix = get_current_fix()
     while run:
       print("Waiting for GPS fix...")
       if fix is None:  # or not 'lat' in fix.keys():
         print("FIX IS NONE!!!!")
         sleep(2)
-        fix = gpsd.get_current()
+        fix = get_current_fix()
         continue
       # os.system('clear')
       print()
@@ -393,7 +427,7 @@ if __name__ == '__main__':
         break
 
       sleep(2)
-      fix = gpsd.get_current()
+      fix = get_current_fix()
 
     print()
     if ignore_fix_flag:
@@ -456,7 +490,7 @@ if __name__ == '__main__':
 #    sys.stdout = os.fdopen(sys.stdout.fileno(), "w", newline=None)
     while run:
       #sleep(.4)
-      fix = gpsd.get_current()
+      fix = get_current_fix()
       runcount += 1
       if pause_count > 0:
         pause_count -= 1
@@ -536,13 +570,13 @@ if __name__ == '__main__':
         if not adistset:
           print('\nCenter in decimal degrees is: lat=', lat, ' lon=', lon, ' with speed=', speed, 'm/s', time.strftime("%D %H:%M:%S", time.localtime()))
           adist = get_radius(prompt="Enter new Alarm radius in feet (radius limit was " + str(adist) + " feet): ")
-          fix = gpsd.get_current()
+          fix = get_current_fix()
           adistset = True
           print("Radius limit", adist, "feet and speed limit", alarm.thresholdspeed, "m/s.")
           print(help_str)
         if not speed_set:
           alarm.thresholdspeed = get_radius(prompt="Enter new speed limit in m/s where 1.0 m/s is approx 2 knots (speed limit was " + str(alarm.thresholdspeed) + " m/s): ")
-          fix = gpsd.get_current()
+          fix = get_current_fix()
           speed_set = True
           print("Radius limit", adist, "feet and speed limit", alarm.thresholdspeed, "m/s.")
 
@@ -653,7 +687,7 @@ if __name__ == '__main__':
             pickle.dump([reflat, reflon], file)
         else:
           print("Keeping previous center point")
-        fix = gpsd.get_current()
+        fix = get_current_fix()
       elif menu == 'p':
         print("Pausing alarm")
         pause_count = pause_interval
@@ -670,7 +704,7 @@ if __name__ == '__main__':
         degrees, minutes, seconds = decdeg2dms(reflon)
         print("Center longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflon, degrees, minutes, seconds, degrees, minutes + seconds/60))
         print("Center bearing from current position is %03.1f degrees True, distance is %d feet and height is %0.1f feet at %s" % (alarm.bearing, alarm.distance, fix.alt * feet_per_meter, time.strftime("%D %H:%M:%S", time.localtime())))
-        fix = gpsd.get_current()
+        fix = get_current_fix()
       elif menu == 't':
         alarm.aset = True
         print("\nTesting alarm")
@@ -681,7 +715,7 @@ if __name__ == '__main__':
         usb_light_on()
         usb_buzzer_once(1.0)
         usb_buzzer_light_off()
-        fix = gpsd.get_current()
+        fix = get_current_fix()
       # elif menu == 'g':
       #   print("Restarting GPS poller on demand at", time.strftime("%D %H:%M:%S", time.localtime()))
       #   gpsp.running = False
