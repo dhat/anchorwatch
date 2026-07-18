@@ -15,15 +15,18 @@ WIDTH = 41
 HEIGHT = 21
 
 # Density shading for how many recent points landed in the same cell --
-# index 0 is reserved for "no points here".
-DENSITY_CHARS = " .:-=+*#%@"
+# index 0 is reserved for "no points here". '.' is deliberately excluded:
+# it sits low in the character cell rather than centered, so it reads
+# inconsistently against the rest of the (vertically centered) ramp.
+DENSITY_CHARS = " :-=+*#%@"
 
-CENTER_CHAR = '+'
+CENTER_CHAR = 'X'  # reserved for center -- never reused in the density ramp
 RADIUS_CHAR = 'o'
+ERROR_CHAR = 'e'  # worst-case position given current GPS error
 CURRENT_CHAR = 'B'  # current boat position -- always drawn on top of everything else
 
 
-def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None):
+def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_feet=None):
     """points: iterable of (east_feet, north_feet) offsets from center.
 
     current: the boat's current position, as an (east_feet, north_feet)
@@ -34,13 +37,26 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None):
     accounts for it; passing a point outside the range of points may place
     it off the edge of the visible plot.
 
+    error_feet: current GPS position error (AlarmState.pos_error), in
+    feet. If given along with current, a single point (ERROR_CHAR) is
+    drawn on the same bearing from center as the current position, at
+    distance a+error_feet where a is the current distance from center --
+    i.e. "worst case, given today's GPS uncertainty, the boat could really
+    be out here." Comparing that point against the radius ring makes it
+    obvious at a glance whether GPS error alone could be putting you past
+    the limit, without needing a whole second ring. Skipped if current is
+    None, error_feet is None, or the boat is currently sitting exactly at
+    center (no bearing to project along).
+
     Returns a multi-line string: a width x height character grid with the
     center marked, the current alarm radius circle overlaid, recent points
     density-shaded by how often each cell was visited, and the current
-    position marked distinctly, followed by a one-line caption.
+    position marked distinctly, followed by a caption line and a legend
+    line spelling out what each marker/density character means.
     """
     points = list(points)
-    half_extent = _half_extent(points, radius_feet)
+    worst_case = _worst_case_point(current, error_feet)
+    half_extent = _half_extent(points, radius_feet, worst_case)
 
     counts = {}
     for east, north in points:
@@ -51,7 +67,7 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None):
     grid = [[' ' for _ in range(width)] for _ in range(height)]
 
     if radius_feet > 0:
-        _draw_radius_ring(grid, radius_feet, half_extent, width, height)
+        _draw_radius_ring(grid, radius_feet, half_extent, width, height, RADIUS_CHAR)
 
     if counts:
         max_count = max(counts.values())
@@ -62,21 +78,43 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None):
     if center_cell is not None:
         grid[center_cell[0]][center_cell[1]] = CENTER_CHAR
 
+    if worst_case is not None:
+        worst_cell = _to_cell(worst_case[0], worst_case[1], half_extent, width, height)
+        if worst_cell is not None:
+            grid[worst_cell[0]][worst_cell[1]] = ERROR_CHAR
+
     if current is not None:
         current_cell = _to_cell(current[0], current[1], half_extent, width, height)
         if current_cell is not None:
             grid[current_cell[0]][current_cell[1]] = CURRENT_CHAR
 
     lines = [''.join(row) for row in grid]
-    caption = "N up / E right -- radius=%dft -- %d pts -- %s=center %s=radius %s=boat-now" % (
-        radius_feet, len(points), CENTER_CHAR, RADIUS_CHAR, CURRENT_CHAR)
-    return '\n'.join(lines) + '\n' + caption
+    if error_feet is not None:
+        caption = "N up / E right -- radius=%dft, GPS error=%dft -- %d pts" % (
+            radius_feet, error_feet, len(points))
+    else:
+        caption = "N up / E right -- radius=%dft -- %d pts" % (radius_feet, len(points))
+    legend = "%s=center  %s=radius  %s=worst-case (current+error)  %s=boat-now  |  density, rarely..often visited: %s" % (
+        CENTER_CHAR, RADIUS_CHAR, ERROR_CHAR, CURRENT_CHAR, DENSITY_CHARS[1:])
+    return '\n'.join(lines) + '\n' + caption + '\n' + legend
 
 
-def _half_extent(points, radius_feet):
+def _worst_case_point(current, error_feet):
+    if current is None or error_feet is None:
+        return None
+    distance = math.hypot(current[0], current[1])
+    if distance <= 0:
+        return None  # no defined bearing to project the error along
+    scale = (distance + error_feet) / distance
+    return current[0] * scale, current[1] * scale
+
+
+def _half_extent(points, radius_feet, worst_case=None):
     half_extent = radius_feet * 1.15 if radius_feet > 0 else 50.0
     for east, north in points:
         half_extent = max(half_extent, abs(east) * 1.1, abs(north) * 1.1)
+    if worst_case is not None:
+        half_extent = max(half_extent, abs(worst_case[0]) * 1.1, abs(worst_case[1]) * 1.1)
     return half_extent
 
 
@@ -94,7 +132,7 @@ def _to_cell(east, north, half_extent, width, height):
     return None
 
 
-def _draw_radius_ring(grid, radius_feet, half_extent, width, height):
+def _draw_radius_ring(grid, radius_feet, half_extent, width, height, char):
     feet_per_col = (2 * half_extent) / (width - 1)
     ring_thickness = feet_per_col * 0.75
     for row in range(height):
@@ -102,4 +140,4 @@ def _draw_radius_ring(grid, radius_feet, half_extent, width, height):
         for col in range(width):
             east = col / (width - 1) * (2 * half_extent) - half_extent
             if abs(math.hypot(east, north) - radius_feet) < ring_thickness:
-                grid[row][col] = RADIUS_CHAR
+                grid[row][col] = char

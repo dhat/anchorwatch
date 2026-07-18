@@ -148,6 +148,29 @@ class AlarmStateTests(unittest.TestCase):
         self.assertEqual(state.track, state.avgtrack)
         self.assertFalse(math.isnan(state.track))
 
+    def test_high_position_error_does_not_force_a_false_alarm_at_center(self):
+        # Regression test: adist - pos_error is the effective alarm radius,
+        # shrinking as GPS accuracy drops. If pos_error alone exceeds a
+        # small adist, that threshold used to go negative, meaning even a
+        # boat sitting exactly at the reference point (avgdist=0) would
+        # "exceed" it and the alarm would fire regardless of actual
+        # position. It should floor at 0 instead.
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, precision=(20.0, 30.0), time="t0")
+        for i in range(10):
+            fix.time = f"t{i + 1}"
+            state.update(fix, REF_LAT, REF_LON, adist=10)
+        self.assertGreater(state.pos_error, 10)  # confirms this scenario is actually exercised
+        self.assertEqual(state.effective_radius, 0.0)
+        self.assertEqual(state.avgdist, 0.0)
+        self.assertFalse(state.aset)
+
+    def test_effective_radius_matches_display_formula_when_not_clamped(self):
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, precision=(1.0, 1.0), time="t1")
+        state.update(fix, REF_LAT, REF_LON, adist=100)
+        self.assertAlmostEqual(state.effective_radius, 100 - state.pos_error)
+
     def test_forced_adata_triggers_alarm_regardless_of_position(self):
         state = self.make_state()
         fix = FakeFix(REF_LAT, REF_LON, time="t1")

@@ -56,6 +56,7 @@ class AlarmState:
         self.distance = 0.0      # current raw distance from ref
         self.bearing = 0.0       # current bearing from ref
         self.speed = 0.0         # current raw speed
+        self.effective_radius = 0.0  # adist shrunk by pos_error, floored at 0
         self.aset = False        # is the drag alarm currently active
         self.utc = None          # last-seen gpsd fix time, to detect a stalled feed
 
@@ -131,9 +132,18 @@ class AlarmState:
         else:
             self.track = self.avgtrack
 
+        # adist shrinks by however much position uncertainty we currently
+        # have, so the alarm gets more cautious as GPS accuracy drops -- but
+        # if pos_error ever exceeds adist that would go negative, meaning
+        # any nonnegative avgdist "exceeds" it and the alarm fires
+        # regardless of actual position. Floor it at 0 instead: worst case,
+        # the alarm becomes maximally sensitive (triggers on any measurable
+        # distance from center), not permanently stuck on.
+        self.effective_radius = max(0.0, adist - self.pos_error)
+
         was_set = self.aset
         self.aset = bool(
-            adata or self.avgdist > (adist - self.pos_error) or self.avgspeed > self.thresholdspeed
+            adata or self.avgdist > self.effective_radius or self.avgspeed > self.thresholdspeed
         )
         result.alarm_triggered = self.aset and not was_set
         result.alarm_cleared = was_set and not self.aset

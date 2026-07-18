@@ -107,7 +107,6 @@ import pickle
 import sys
 import getopt
 import signal
-import serial
 from collections import deque
 from subprocess import call
 
@@ -117,6 +116,7 @@ import gpsd_compat
 import nmea_gps_source
 from gpsd_source import GpsdSource
 import swing_plot
+from buzzer import Buzzer
 
 # Some receiver/driver combos (confirmed with gpsd 3.25 + NMEA0183 read-only)
 # never send gpsd-py3 the per-satellite array it needs to count sats, so it
@@ -157,24 +157,9 @@ latlon_file = 'latlon.pkl'
 buzzer_dev = "/dev/buzzer"
 baudRate = 9600
 
-RED_ON = 0x11
-RED_OFF = 0x21
-RED_BLINK = 0x41
-
-YELLOW_ON = 0x12
-YELLOW_OFF = 0x22
-YELLOW_BLINK = 0x42
-
-GREEN_ON = 0x14
-GREEN_OFF = 0x24
-GREEN_BLINK = 0x44
-
-BUZZER_ON = 0x18
-BUZZER_OFF = 0x28
-BUZZER_BLINK = 0x48
-
-if os.path.exists(buzzer_dev):
-  mSerial = serial.Serial(buzzer_dev, baudRate)
+# Reuses one persistent serial connection instead of opening a fresh one on
+# every command -- see buzzer.py for why (a real freeze this used to cause).
+buzzer_ctrl = Buzzer(buzzer_dev, baudRate)
 
 # System Sounds:
 # TODO check that these paths exist
@@ -291,44 +276,8 @@ if __name__ == '__main__':
     return val
 
 
-  def send_command(serialport, cmd):
-    if os.path.exists(buzzer_dev):
-      serialport.write(bytes([cmd]))
-
-
-  def usb_buzzer_once(duration=0.5):
-    if os.path.exists(buzzer_dev):
-      send_command(serial.Serial(buzzer_dev, baudRate), RED_ON)
-      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
-      sleep(duration)
-      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
-      send_command(serial.Serial(buzzer_dev, baudRate), RED_OFF)
-
-
-  def usb_light_on():
-    if os.path.exists(buzzer_dev):
-      send_command(serial.Serial(buzzer_dev, baudRate), RED_BLINK)
-
-
-  def usb_buzzer_on():
-    if os.path.exists(buzzer_dev):
-      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_ON)
-
-
-  def usb_buzzer_off():
-    if os.path.exists(buzzer_dev):
-      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
-
-
-  def usb_buzzer_light_off():
-    if os.path.exists(buzzer_dev):
-      send_command(serial.Serial(buzzer_dev, baudRate), BUZZER_OFF)
-      send_command(serial.Serial(buzzer_dev, baudRate), RED_OFF)
-
-
-  if osname == "linux" and os.path.exists(buzzer_dev):
-    usb_buzzer_light_off()
-    serial.Serial(buzzer_dev, baudRate).close()
+  if osname == "linux" and buzzer_ctrl.available():
+    buzzer_ctrl.buzzer_light_off()
   # gpsd (in-boat puck): wrapped in GpsdSource so a missing/dropped gpsd
   # degrades gracefully instead of hanging or crashing -- see gpsd_source.py.
   # Not fatal if unreachable at startup: the masthead NMEA feed may well be
@@ -417,13 +366,13 @@ if __name__ == '__main__':
 
       if fix.mode == 3:
         print("Testing alarm")
-        if os.path.exists(buzzer_dev):
+        if buzzer_ctrl.available():
           print("Buzzer exists")
         else:
           print("Buzzer does not exist at:", buzzer_dev)
-        usb_light_on()
-        usb_buzzer_once(1.0)
-        usb_buzzer_light_off()
+        buzzer_ctrl.light_on()
+        buzzer_ctrl.buzzer_once(1.0)
+        buzzer_ctrl.buzzer_light_off()
         print("Got a good fix and exiting poling setup")
         break
 
@@ -519,15 +468,15 @@ if __name__ == '__main__':
             # call(["ls", "-l"])
             call([buzzer_program_filename])
           if not buzzer_on:
-            usb_buzzer_on()
+            buzzer_ctrl.buzzer_on()
             buzzer_on = True
           else:
-            usb_buzzer_off()
+            buzzer_ctrl.buzzer_off()
             buzzer_on = False
           if not light_on:
             print("Alarm triggered", time.strftime("%D %H:%M:%S", time.localtime()))
             acount += 1
-            usb_light_on()
+            buzzer_ctrl.light_on()
             light_on = True
 
           # TODO catch error here? if these don't work??
@@ -536,10 +485,10 @@ if __name__ == '__main__':
 
         if alarm.iseq > maxiseq:
            print("Invalid gps", alarm.iseq, "times which is over threshold of", maxiseq)
-           usb_light_on()
-           usb_buzzer_once()
+           buzzer_ctrl.light_on()
+           buzzer_ctrl.buzzer_once()
            sleep(1)
-           usb_buzzer_light_off()
+           buzzer_ctrl.buzzer_light_off()
            # errorSound.play()
 
       if fix.mode != 3 and not ignore_fix_flag:
@@ -606,7 +555,7 @@ if __name__ == '__main__':
         #     if line_checks > 10:
         #       adata = True
         #       print("Data not updated error in", line_checks, "checks at", time.strftime("%D %H:%M:%S", time.localtime()))
-        #       usb_buzzer_once()
+        #       buzzer_ctrl.buzzer_once()
         #       break
         #     sleep(2)
         #     line_count = int(os.system("tail " + data_log_file_pattern + " | grep -sqc \"$(date +'%Y-%m-%d, %H:%M')\""))
@@ -640,7 +589,7 @@ if __name__ == '__main__':
             print("WARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
           if result.iseq_reset:
             print("Resetting iseq from", old_iseq, " to 0 at", time.strftime("%D %H:%M:%S", time.localtime()))
-            usb_buzzer_light_off()
+            buzzer_ctrl.buzzer_light_off()
             buzzer_on = False
             light_on = False
 
@@ -652,7 +601,7 @@ if __name__ == '__main__':
 
         if result.alarm_cleared:
           print("Alarm cleared at", time.strftime("%D %H:%M:%S", time.localtime()))
-          usb_buzzer_light_off()
+          buzzer_ctrl.buzzer_light_off()
           buzzer_on = False
           light_on = False
 
@@ -663,16 +612,17 @@ if __name__ == '__main__':
         # alert while this view is active, not the on-screen text.
         sys.stdout.write('\033[2J\033[H')
         current_offset = position_history[-1] if position_history else None
-        sys.stdout.write(swing_plot.render(position_history, adist, current=current_offset))
+        sys.stdout.write(swing_plot.render(
+            position_history, adist, current=current_offset, error_feet=alarm.pos_error))
         sys.stdout.write('\n\n')
 
       if extended_output:
-        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.1f mps/%.1f maxmps/%.1f errmps: filtered=%.1f mps/%.1f maxmps/%.1f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, adist - alarm.pos_error, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror))
+        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.1f mps/%.1f maxmps/%.1f errmps: filtered=%.1f mps/%.1f maxmps/%.1f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror))
       # sys.stdout.write('\rAlarm=%d: Cnt=%d: RawRad/mx=%d/%dfeet: SmRad/mx/lmt=%d/%d/%dft: RawSpd/mx=%.1f/%.1fm/s: SmSpd/mx/lmt=%.1f/%.1f/%.1fm/s: Trk/avg=%.1f/%.1fD: Ivd=%d/%d   ' % (aset,  acount, distance, mrawdist, avgdist, mdist, adist, speed, mrawspeed, avgspeed, maxspeed, thresholdspeed, track, avgtrack, icount, runcount))
       else:
         sys.stdout.write(
           '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.1fmps/%.1falarm-mps %.1fmax-mps %.1ferr-mps:: Ivld=%d/%d:: sats=%d/%d::       ' % (
-          alarm.aset, acount, alarm.avgdist, adist - alarm.pos_error, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed, alarm.thresholdspeed, alarm.maxspeed, fix_error['s'], alarm.icount, runcount, fix.sats_valid, fix.sats))
+          alarm.aset, acount, alarm.avgdist, alarm.effective_radius, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed, alarm.thresholdspeed, alarm.maxspeed, fix_error['s'], alarm.icount, runcount, fix.sats_valid, fix.sats))
       sys.stdout.flush()  # to clear when using \r
       menu = non_blocking_raw_Input('')
       if menu == 'q':
@@ -712,7 +662,7 @@ if __name__ == '__main__':
       elif menu == 'p':
         print("Pausing alarm")
         pause_count = pause_interval
-        usb_buzzer_off()
+        buzzer_ctrl.buzzer_off()
         buzzer_on = False
       elif menu == 'x':
         if extended_output:
@@ -731,13 +681,13 @@ if __name__ == '__main__':
       elif menu == 't':
         alarm.aset = True
         print("\nTesting alarm")
-        if os.path.exists(buzzer_dev):
+        if buzzer_ctrl.available():
           print("Buzzer exists")
         else:
           print("Buzzer does not exist at:", buzzer_dev)
-        usb_light_on()
-        usb_buzzer_once(1.0)
-        usb_buzzer_light_off()
+        buzzer_ctrl.light_on()
+        buzzer_ctrl.buzzer_once(1.0)
+        buzzer_ctrl.buzzer_light_off()
         fix = get_current_fix()
       # elif menu == 'g':
       #   print("Restarting GPS poller on demand at", time.strftime("%D %H:%M:%S", time.localtime()))
@@ -755,23 +705,23 @@ if __name__ == '__main__':
     # Exit while loop
     print("\nExiting normally...")  # normal exit
     run = False
-    if osname == "linux" and os.path.exists(buzzer_dev):
-      usb_buzzer_light_off()
-      serial.Serial(buzzer_dev, baudRate).close()
+    if osname == "linux" and buzzer_ctrl.available():
+      buzzer_ctrl.buzzer_light_off()
+      buzzer_ctrl.close()
 
   except (KeyboardInterrupt, SystemExit):  # runs if you press ctrl+c to exit
     print("\nInterrupt Killing Program...")
     run = False
-    if osname == "linux" and os.path.exists(buzzer_dev):
-      usb_buzzer_light_off()
-      serial.Serial(buzzer_dev, baudRate).close()
+    if osname == "linux" and buzzer_ctrl.available():
+      buzzer_ctrl.buzzer_light_off()
+      buzzer_ctrl.close()
 
   except Exception as e:
     # TODO are there cases where we can restart automatically?
     print("General failure exception:", e)
     # Turn on buzzer alarm
-    if osname == "linux" and os.path.exists(buzzer_dev):
-      usb_buzzer_on()
-      usb_light_on()
+    if osname == "linux" and buzzer_ctrl.available():
+      buzzer_ctrl.buzzer_on()
+      buzzer_ctrl.light_on()
 
   print("Done.\nExiting Anchor Watch.")
