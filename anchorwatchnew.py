@@ -492,7 +492,7 @@ if __name__ == '__main__':
     speed_alarm_points = []    # speed-triggered (raw current position)
     heading_alarm_points = []  # wind speed + heading triggered (raw current position)
 
-    help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'c<enter>\' to change circle center lat/lon, \'a<enter>\' to show anchor position, \'s<enter>\' to change speed limit, \'w<enter>\' to change wind speed/heading alarm limits, \'x<enter>\' to toggle short and long output formats, \'p<enter>\' to temporarily pause alarm, \'v<enter>\' to toggle a live view of the recent swing pattern, \'z<enter>\' to clear recorded alarm positions, \'t<enter>\' to test alarm or \'q<enter>\' to quit the program."
+    help_str = "\nHelp: \'h\': Use \'a<enter>\' to show anchor position, \'c<enter>\' to change circle center lat/lon, \'p<enter>\' to temporarily pause alarm, \'q<enter>\' to quit the program, \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'t<enter>\' to test alarm, \'v<enter>\' to toggle a live view of the recent swing pattern, \'w<enter>\' to change wind speed/heading alarm limits, \'x<enter>\' to toggle short and long output formats or \'z<enter>\' to clear recorded alarm positions."
 
     # This is to prevent the next fix from having the same time and triggering an invalid gps data warning
     sleep(2)
@@ -719,24 +719,13 @@ if __name__ == '__main__':
           alarm.aset, acount, alarm.avgdist, alarm.effective_radius, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed / KNOTS_TO_MPS, alarm.thresholdspeed / KNOTS_TO_MPS, alarm.maxspeed / KNOTS_TO_MPS, fix_error['s'] / KNOTS_TO_MPS, alarm.icount, runcount, fix.sats_valid, fix.sats, wind_text))
       sys.stdout.flush()  # to clear when using \r
       menu = non_blocking_raw_Input('')
-      if menu == 'q':
-        break
-      elif menu == 'h':
-        print(help_str)
-        help_pause_count = help_pause_interval
-      elif menu == 'r':
-        adistset = False
-      elif menu == 's':
-        speed_set = False
-      elif menu == 'w':
-        alarm.wind_speed_threshold_kt = get_radius(
-          prompt="Enter new wind speed alarm limit in knots (was " +
-                 str(alarm.wind_speed_threshold_kt) + " kt): ")
-        alarm.wind_heading_threshold_deg = get_radius(
-          prompt="Enter new relative wind heading alarm limit in degrees off the bow (was " +
-                 str(alarm.wind_heading_threshold_deg) + " deg): ")
-        print("Wind alarm now triggers above", alarm.wind_speed_threshold_kt, "kt and",
-              alarm.wind_heading_threshold_deg, "degrees off the bow, together.")
+      if menu == 'a':
+        degrees, minutes, seconds = decdeg2dms(reflat)
+        print("\nCenter latitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflat, degrees, minutes, seconds, degrees, minutes + seconds/60))
+        degrees, minutes, seconds = decdeg2dms(reflon)
+        print("Center longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflon, degrees, minutes, seconds, degrees, minutes + seconds/60))
+        print("Center bearing from current position is %03.1f degrees True, distance is %d feet and height is %0.1f feet at %s" % (alarm.bearing, alarm.distance, fix.alt * feet_per_meter, time.strftime("%D %H:%M:%S", time.localtime())))
+        fix = get_current_fix()
       elif menu == 'c':
         print("Change center location")
         templat = get_dd_lat(prompt="Enter new lat in DD to replace current of " + str(reflat) + ": ")
@@ -763,31 +752,20 @@ if __name__ == '__main__':
         else:
           print("Keeping previous center point")
         fix = get_current_fix()
+      elif menu == 'h':
+        print(help_str)
+        help_pause_count = help_pause_interval
       elif menu == 'p':
         print("Pausing alarm")
         pause_count = pause_interval
         buzzer_ctrl.buzzer_off()
         buzzer_on = False
-      elif menu == 'x':
-        if extended_output:
-          extended_output = False
-        else:
-          extended_output = True
-      elif menu == 'a':
-        degrees, minutes, seconds = decdeg2dms(reflat)
-        print("\nCenter latitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflat, degrees, minutes, seconds, degrees, minutes + seconds/60))
-        degrees, minutes, seconds = decdeg2dms(reflon)
-        print("Center longitude DD: %f or DMS: %d:%d:%f or DDM: %d:%f" % (reflon, degrees, minutes, seconds, degrees, minutes + seconds/60))
-        print("Center bearing from current position is %03.1f degrees True, distance is %d feet and height is %0.1f feet at %s" % (alarm.bearing, alarm.distance, fix.alt * feet_per_meter, time.strftime("%D %H:%M:%S", time.localtime())))
-        fix = get_current_fix()
-      elif menu == 'v':
-        show_swing_plot = not show_swing_plot
-      elif menu == 'z':
-        print("Clearing", len(alarm_points), "distance-alarm,", len(speed_alarm_points),
-              "speed-alarm, and", len(heading_alarm_points), "heading-alarm recorded position(s)")
-        alarm_points.clear()
-        speed_alarm_points.clear()
-        heading_alarm_points.clear()
+      elif menu == 'q':
+        break
+      elif menu == 'r':
+        adistset = False
+      elif menu == 's':
+        speed_set = False
       elif menu == 't':
         alarm.aset = True
         print("\nTesting alarm")
@@ -799,6 +777,28 @@ if __name__ == '__main__':
         buzzer_ctrl.buzzer_once(1.0)
         buzzer_ctrl.buzzer_light_off()
         fix = get_current_fix()
+      elif menu == 'v':
+        show_swing_plot = not show_swing_plot
+      elif menu == 'w':
+        alarm.wind_speed_threshold_kt = get_radius(
+          prompt="Enter new wind speed alarm limit in knots (was " +
+                 str(alarm.wind_speed_threshold_kt) + " kt): ")
+        alarm.wind_heading_threshold_deg = get_radius(
+          prompt="Enter new relative wind heading alarm limit in degrees off the bow (was " +
+                 str(alarm.wind_heading_threshold_deg) + " deg): ")
+        print("Wind alarm now triggers above", alarm.wind_speed_threshold_kt, "kt and",
+              alarm.wind_heading_threshold_deg, "degrees off the bow, together.")
+      elif menu == 'x':
+        if extended_output:
+          extended_output = False
+        else:
+          extended_output = True
+      elif menu == 'z':
+        print("Clearing", len(alarm_points), "distance-alarm,", len(speed_alarm_points),
+              "speed-alarm, and", len(heading_alarm_points), "heading-alarm recorded position(s)")
+        alarm_points.clear()
+        speed_alarm_points.clear()
+        heading_alarm_points.clear()
       # elif menu == 'g':
       #   print("Restarting GPS poller on demand at", time.strftime("%D %H:%M:%S", time.localtime()))
       #   gpsp.running = False
