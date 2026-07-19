@@ -114,6 +114,7 @@ from geo import calc_distance, calc_bearing, decdeg2dms, offset_from_center
 from alarm_state import AlarmState, FEET_PER_METER
 import gpsd_compat
 import nmea_gps_source
+from nmea_gps_source import KNOTS_TO_MPS
 from gpsd_source import GpsdSource
 import swing_plot
 from buzzer import Buzzer
@@ -144,7 +145,9 @@ if osname == "linux":
 buzzer_program_filename = "disable"
 ignore_fix_flag = False  # Set this if gps source doesn't have fix quality info so it will be ignored
 maxiseq = 10  # number of bad gps data in a row to trigger info alarm
-thresholdspeed = 1.6  # 15  # m/s where 0.5m/s is 1 knot and 15m/s is 30knots
+thresholdspeed = 1.6  # m/s (~3.1kt) -- AlarmState/internal speeds stay in m/s (what GPS
+                       # sources report); knots is purely a display/input convention,
+                       # converted at the boundary (see KNOTS_TO_MPS usage below).
 maxaccel = 5.0  # 10.0  # read-to-read max change in speed or data is ignored
 min_sats = 4
 min_precision = 8
@@ -385,7 +388,7 @@ if __name__ == '__main__':
       print('altitude (m)', fix.alt)
       # print('ept         ', fix['ept'])
       # print('eph         ', fix['eph'])
-      print('speed (m/s) ', fix.hspeed)
+      print('speed (kt)  ', fix.hspeed / KNOTS_TO_MPS)
       print('climb       ', fix.climb)
       print('track       ', fix.track)
       print('total sats  ', fix.sats)
@@ -427,7 +430,7 @@ if __name__ == '__main__':
     print('altitude (m)', fix.alt)
     # print('ept         ', fix['ept'])
     # print('eph         ', fix['eph'])
-    print('speed (m/s) ', fix.hspeed)
+    print('speed (kt)  ', fix.hspeed / KNOTS_TO_MPS)
     # print('climb       ', fix.climb)
     print('track       ', fix.track)
     print('total sats  ', fix.sats)
@@ -569,17 +572,17 @@ if __name__ == '__main__':
             pickle.dump([reflat, reflon], file)
           refset = True
         if not adistset:
-          print('\nCenter in decimal degrees is: lat=', lat, ' lon=', lon, ' with speed=', speed, 'm/s', time.strftime("%D %H:%M:%S", time.localtime()))
+          print('\nCenter in decimal degrees is: lat=', lat, ' lon=', lon, ' with speed=', speed / KNOTS_TO_MPS, 'kt', time.strftime("%D %H:%M:%S", time.localtime()))
           adist = get_radius(prompt="Enter new Alarm radius in feet (radius limit was " + str(adist) + " feet): ")
           fix = get_current_fix()
           adistset = True
-          print("Radius limit", adist, "feet and speed limit", alarm.thresholdspeed, "m/s.")
+          print("Radius limit", adist, "feet and speed limit", alarm.thresholdspeed / KNOTS_TO_MPS, "kt.")
           print(help_str)
         if not speed_set:
-          alarm.thresholdspeed = get_radius(prompt="Enter new speed limit in m/s where 1.0 m/s is approx 2 knots (speed limit was " + str(alarm.thresholdspeed) + " m/s): ")
+          alarm.thresholdspeed = get_radius(prompt="Enter new speed limit in knots (speed limit was " + str(alarm.thresholdspeed / KNOTS_TO_MPS) + " kt): ") * KNOTS_TO_MPS
           fix = get_current_fix()
           speed_set = True
-          print("Radius limit", adist, "feet and speed limit", alarm.thresholdspeed, "m/s.")
+          print("Radius limit", adist, "feet and speed limit", alarm.thresholdspeed / KNOTS_TO_MPS, "kt.")
 
         # if len(data_log_file_pattern) > 0:
         #   # This checks the data logger file which relies on the same ground truth as the gpsd.  So a failure here
@@ -624,7 +627,7 @@ if __name__ == '__main__':
         result = alarm.update(fix, reflat, reflon, adist, adata)
 
         if result.bad_distance:
-          print("bad distance", result.bad_distance_value, "with speed", speed, "m/s and acceleration", speed - alarm.avgspeed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+          print("bad distance", result.bad_distance_value, "with speed", speed / KNOTS_TO_MPS, "kt and acceleration", (speed - alarm.avgspeed) / KNOTS_TO_MPS, "kt/tick at", time.strftime("%D %H:%M:%S", time.localtime()))
         else:
           current_offset_this_tick = offset_from_center(reflat, reflon, lat, lon)
           position_history.append(current_offset_this_tick)
@@ -680,12 +683,12 @@ if __name__ == '__main__':
         sys.stdout.write('\n\n')
 
       if extended_output:
-        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.2f mps/%.2f maxmps/%.2f errmps: filtered=%.2f mps/%.2f maxmps/%.2f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err: %s:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror, wind_text))
+        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.2f kt/%.2f maxkt/%.2f errkt: filtered=%.2f kt/%.2f maxkt/%.2f alarmkt: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err: %s:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed / KNOTS_TO_MPS, alarm.mrawspeed / KNOTS_TO_MPS, fix_error['s'] / KNOTS_TO_MPS, alarm.avgspeed / KNOTS_TO_MPS, alarm.maxspeed / KNOTS_TO_MPS, alarm.thresholdspeed / KNOTS_TO_MPS, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror, wind_text))
       # sys.stdout.write('\rAlarm=%d: Cnt=%d: RawRad/mx=%d/%dfeet: SmRad/mx/lmt=%d/%d/%dft: RawSpd/mx=%.1f/%.1fm/s: SmSpd/mx/lmt=%.1f/%.1f/%.1fm/s: Trk/avg=%.1f/%.1fD: Ivd=%d/%d   ' % (aset,  acount, distance, mrawdist, avgdist, mdist, adist, speed, mrawspeed, avgspeed, maxspeed, thresholdspeed, track, avgtrack, icount, runcount))
       else:
         sys.stdout.write(
-          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.2fmps/%.2falarm-mps %.2fmax-mps %.2ferr-mps:: Ivld=%d/%d:: sats=%d/%d:: %s::       ' % (
-          alarm.aset, acount, alarm.avgdist, alarm.effective_radius, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed, alarm.thresholdspeed, alarm.maxspeed, fix_error['s'], alarm.icount, runcount, fix.sats_valid, fix.sats, wind_text))
+          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.2fkt/%.2falarm-kt %.2fmax-kt %.2ferr-kt:: Ivld=%d/%d:: sats=%d/%d:: %s::       ' % (
+          alarm.aset, acount, alarm.avgdist, alarm.effective_radius, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed / KNOTS_TO_MPS, alarm.thresholdspeed / KNOTS_TO_MPS, alarm.maxspeed / KNOTS_TO_MPS, fix_error['s'] / KNOTS_TO_MPS, alarm.icount, runcount, fix.sats_valid, fix.sats, wind_text))
       sys.stdout.flush()  # to clear when using \r
       menu = non_blocking_raw_Input('')
       if menu == 'q':
