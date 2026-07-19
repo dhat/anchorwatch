@@ -452,6 +452,12 @@ if __name__ == '__main__':
     speed_set = True  # flag for setting speed
     pause_interval = 15  # duration of alarm pause
     pause_count = 0   # tracks duration
+    # 'h' while the swing plot is showing used to print help_str only for it
+    # to be wiped by the very next tick's screen clear, making it basically
+    # unreadable. Holding the clear+redraw off for a few ticks after 'h'
+    # gives the user time to actually read it before the live view resumes.
+    help_pause_interval = 10
+    help_pause_count = 0
     extended_output = False  # default display option
     show_swing_plot = False  # 'v' toggles a continuously-redrawing swing pattern view
     lat = 0       # to ensure a value is set
@@ -499,6 +505,8 @@ if __name__ == '__main__':
       runcount += 1
       if pause_count > 0:
         pause_count -= 1
+      if help_pause_count > 0:
+        help_pause_count -= 1
       if osname == "hildon":
         if alarm.aset and pause_count == 0:
           hildon.hildon_play_system_sound("/usr/share/sounds/ui-general_warning.wav")
@@ -681,11 +689,12 @@ if __name__ == '__main__':
 
       wind_text = format_wind(wind)
 
-      if show_swing_plot:
+      if show_swing_plot and help_pause_count == 0:
         # Clear + redraw in place each tick, like a live radar sweep. This
         # also clears away any messages printed above (alarm triggered,
         # invalid gps, etc.) -- the buzzer/light alarm is still the primary
-        # alert while this view is active, not the on-screen text.
+        # alert while this view is active, not the on-screen text. Skipped
+        # for a few ticks right after 'h' -- see help_pause_count above.
         sys.stdout.write('\033[2J\033[H')
         current_offset = position_history[-1] if position_history else None
         sys.stdout.write(swing_plot.render(
@@ -694,12 +703,19 @@ if __name__ == '__main__':
             heading_alarm_points=heading_alarm_points))
         sys.stdout.write('\n\n')
 
+      # Trailing '\033[K' (erase to end of line) instead of fixed padding
+      # spaces -- padding has to guess how much longer the previous line
+      # might have been, and guessing wrong either leaves stray leftover
+      # characters (guessed too little) or makes the line long enough to
+      # wrap in a narrow terminal, which breaks the in-place \r update and
+      # spills new lines instead. \033[K always clears exactly what's left
+      # over, however much or little that is.
       if extended_output:
-        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.2f kt/%.2f maxkt/%.2f errkt: filtered=%.2f kt/%.2f maxkt/%.2f alarmkt: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err: %s:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed / KNOTS_TO_MPS, alarm.mrawspeed / KNOTS_TO_MPS, fix_error['s'] / KNOTS_TO_MPS, alarm.avgspeed / KNOTS_TO_MPS, alarm.maxspeed / KNOTS_TO_MPS, alarm.thresholdspeed / KNOTS_TO_MPS, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror, wind_text))
+        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.2f kt/%.2f maxkt/%.2f errkt: filtered=%.2f kt/%.2f maxkt/%.2f alarmkt: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err: %s:\033[K' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed / KNOTS_TO_MPS, alarm.mrawspeed / KNOTS_TO_MPS, fix_error['s'] / KNOTS_TO_MPS, alarm.avgspeed / KNOTS_TO_MPS, alarm.maxspeed / KNOTS_TO_MPS, alarm.thresholdspeed / KNOTS_TO_MPS, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror, wind_text))
       # sys.stdout.write('\rAlarm=%d: Cnt=%d: RawRad/mx=%d/%dfeet: SmRad/mx/lmt=%d/%d/%dft: RawSpd/mx=%.1f/%.1fm/s: SmSpd/mx/lmt=%.1f/%.1f/%.1fm/s: Trk/avg=%.1f/%.1fD: Ivd=%d/%d   ' % (aset,  acount, distance, mrawdist, avgdist, mdist, adist, speed, mrawspeed, avgspeed, maxspeed, thresholdspeed, track, avgtrack, icount, runcount))
       else:
         sys.stdout.write(
-          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.2fkt/%.2falarm-kt %.2fmax-kt %.2ferr-kt:: Ivld=%d/%d:: sats=%d/%d:: %s::       ' % (
+          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.2fkt/%.2falarm-kt %.2fmax-kt %.2ferr-kt:: Ivld=%d/%d:: sats=%d/%d:: %s::\033[K' % (
           alarm.aset, acount, alarm.avgdist, alarm.effective_radius, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed / KNOTS_TO_MPS, alarm.thresholdspeed / KNOTS_TO_MPS, alarm.maxspeed / KNOTS_TO_MPS, fix_error['s'] / KNOTS_TO_MPS, alarm.icount, runcount, fix.sats_valid, fix.sats, wind_text))
       sys.stdout.flush()  # to clear when using \r
       menu = non_blocking_raw_Input('')
@@ -707,6 +723,7 @@ if __name__ == '__main__':
         break
       elif menu == 'h':
         print(help_str)
+        help_pause_count = help_pause_interval
       elif menu == 'r':
         adistset = False
       elif menu == 's':
