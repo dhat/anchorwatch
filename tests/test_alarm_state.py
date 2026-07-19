@@ -184,6 +184,54 @@ class AlarmStateTests(unittest.TestCase):
         self.assertTrue(state.aset)
         self.assertTrue(result.alarm_triggered)
 
+    def test_wind_thresholds_default_to_10kt_and_45deg(self):
+        state = self.make_state()
+        self.assertEqual(state.wind_speed_threshold_kt, 10.0)
+        self.assertEqual(state.wind_heading_threshold_deg, 45.0)
+
+    def test_wind_speed_and_heading_both_over_threshold_triggers_alarm(self):
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, time="t1")
+        result = state.update(fix, REF_LAT, REF_LON, adist=500,
+                               wind_speed_knots=15.0, wind_angle_off_bow=60.0)
+        self.assertTrue(state.triggered_by_heading)
+        self.assertTrue(state.aset)
+        self.assertTrue(result.alarm_triggered)
+        self.assertFalse(state.triggered_by_distance)
+        self.assertFalse(state.triggered_by_speed)
+
+    def test_wind_speed_alone_over_threshold_does_not_trigger_alarm(self):
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, time="t1")
+        state.update(fix, REF_LAT, REF_LON, adist=500,
+                     wind_speed_knots=15.0, wind_angle_off_bow=20.0)
+        self.assertFalse(state.triggered_by_heading)
+        self.assertFalse(state.aset)
+
+    def test_wind_heading_alone_over_threshold_does_not_trigger_alarm(self):
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, time="t1")
+        state.update(fix, REF_LAT, REF_LON, adist=500,
+                     wind_speed_knots=5.0, wind_angle_off_bow=60.0)
+        self.assertFalse(state.triggered_by_heading)
+        self.assertFalse(state.aset)
+
+    def test_missing_wind_data_never_triggers_heading_alarm(self):
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, time="t1")
+        state.update(fix, REF_LAT, REF_LON, adist=500,
+                     wind_speed_knots=None, wind_angle_off_bow=None)
+        self.assertFalse(state.triggered_by_heading)
+        self.assertFalse(state.aset)
+
+    def test_custom_wind_thresholds_are_respected(self):
+        state = self.make_state(wind_speed_threshold_kt=20.0, wind_heading_threshold_deg=90.0)
+        fix = FakeFix(REF_LAT, REF_LON, time="t1")
+        # Would have tripped the default 10kt/45deg thresholds, but not these.
+        state.update(fix, REF_LAT, REF_LON, adist=500,
+                     wind_speed_knots=15.0, wind_angle_off_bow=60.0)
+        self.assertFalse(state.triggered_by_heading)
+
 
 if __name__ == '__main__':
     unittest.main()

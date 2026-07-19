@@ -25,11 +25,12 @@ RADIUS_CHAR = 'o'
 ERROR_CHAR = 'e'  # worst-case position given current GPS error
 ALARM_CHAR = 'a'  # a position where the alarm was actively sounding due to distance
 SPEED_ALARM_CHAR = 's'  # a position where the alarm was actively sounding due to speed
+HEADING_ALARM_CHAR = 'h'  # a position where the alarm was actively sounding due to wind/heading
 CURRENT_CHAR = 'B'  # current boat position -- always drawn on top of everything else
 
 
 def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_feet=None,
-           alarm_points=None, speed_alarm_points=None):
+           alarm_points=None, speed_alarm_points=None, heading_alarm_points=None):
     """points: iterable of (east_feet, north_feet) offsets from center.
 
     current: the boat's current position, as an (east_feet, north_feet)
@@ -62,10 +63,16 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
     doesn't have the same "worst case" relationship to a speed threshold
     that it does to a distance threshold, so there's nothing to adjust for.
 
-    Both alarm_points and speed_alarm_points are meant to be unbounded,
-    caller-managed records that persist until explicitly cleared (unlike
-    points, a rolling recent-history window), so past alarm episodes stay
-    visible across the session.
+    heading_alarm_points: iterable of (east_feet, north_feet) offsets
+    recorded at every tick the alarm was actively sounding due to wind
+    speed + relative heading, marked with HEADING_ALARM_CHAR. Like
+    speed_alarm_points, these are the raw current position, not a
+    worst-case-adjusted one.
+
+    alarm_points, speed_alarm_points, and heading_alarm_points are all
+    meant to be unbounded, caller-managed records that persist until
+    explicitly cleared (unlike points, a rolling recent-history window),
+    so past alarm episodes stay visible across the session.
 
     Returns a multi-line string: a width x height character grid with the
     center marked, the current alarm radius circle overlaid, recent points
@@ -76,8 +83,11 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
     points = list(points)
     alarm_points = list(alarm_points) if alarm_points is not None else []
     speed_alarm_points = list(speed_alarm_points) if speed_alarm_points is not None else []
+    heading_alarm_points = list(heading_alarm_points) if heading_alarm_points is not None else []
     worst_case = worst_case_point(current, error_feet)
-    half_extent = _half_extent(points, radius_feet, worst_case, alarm_points + speed_alarm_points)
+    half_extent = _half_extent(
+        points, radius_feet, worst_case,
+        alarm_points + speed_alarm_points + heading_alarm_points)
 
     counts = {}
     for east, north in points:
@@ -105,6 +115,11 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
         if cell is not None:
             grid[cell[0]][cell[1]] = SPEED_ALARM_CHAR
 
+    for east, north in heading_alarm_points:
+        cell = _to_cell(east, north, half_extent, width, height)
+        if cell is not None:
+            grid[cell[0]][cell[1]] = HEADING_ALARM_CHAR
+
     center_cell = _to_cell(0, 0, half_extent, width, height)
     if center_cell is not None:
         grid[center_cell[0]][center_cell[1]] = CENTER_CHAR
@@ -120,17 +135,18 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
             grid[current_cell[0]][current_cell[1]] = CURRENT_CHAR
 
     lines = [''.join(row) for row in grid]
-    counts_suffix = "%d pts, %d alarm pts, %d speed-alarm pts" % (
-        len(points), len(alarm_points), len(speed_alarm_points))
+    counts_suffix = "%d pts, %d alarm pts, %d speed-alarm pts, %d heading-alarm pts" % (
+        len(points), len(alarm_points), len(speed_alarm_points), len(heading_alarm_points))
     if error_feet is not None:
         caption = "N up / E right -- radius=%dft, GPS error=%dft -- %s" % (
             radius_feet, error_feet, counts_suffix)
     else:
         caption = "N up / E right -- radius=%dft -- %s" % (radius_feet, counts_suffix)
     legend = ("%s=center  %s=radius  %s=worst-case (current+error)  %s=alarm sounded (distance)  "
-              "%s=alarm sounded (speed)  %s=boat-now  |  density, rarely..often visited: %s") % (
-        CENTER_CHAR, RADIUS_CHAR, ERROR_CHAR, ALARM_CHAR, SPEED_ALARM_CHAR, CURRENT_CHAR,
-        DENSITY_CHARS[1:])
+              "%s=alarm sounded (speed)  %s=alarm sounded (heading)  %s=boat-now  |  "
+              "density, rarely..often visited: %s") % (
+        CENTER_CHAR, RADIUS_CHAR, ERROR_CHAR, ALARM_CHAR, SPEED_ALARM_CHAR, HEADING_ALARM_CHAR,
+        CURRENT_CHAR, DENSITY_CHARS[1:])
     return '\n'.join(lines) + '\n' + caption + '\n' + legend
 
 

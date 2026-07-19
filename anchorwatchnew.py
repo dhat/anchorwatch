@@ -273,9 +273,9 @@ if __name__ == '__main__':
   def format_wind(wind):
     """One compact status-line segment for a nmea_gps_source.WindInfo.
 
-    Informational only, for now -- not wired into the alarm decision. See
-    nmea_gps_source.py for why low wind freezes the smoothed angle instead
-    of showing it drift with spin.
+    Also drives AlarmState's heading-based trigger (wind speed + relative
+    heading both over threshold) -- see nmea_gps_source.py for why low
+    wind freezes the smoothed angle instead of showing it drift with spin.
     """
     if wind.relative_angle_off_bow is None:
       return 'Wind=--'
@@ -482,10 +482,11 @@ if __name__ == '__main__':
     # unbounded and never roll off on their own -- a record of past alarm
     # episodes the user explicitly asked to be able to review across the
     # whole session, cleared only on demand ('z').
-    alarm_points = []        # distance-triggered (worst-case, error-adjusted)
-    speed_alarm_points = []  # speed-triggered (raw current position)
+    alarm_points = []          # distance-triggered (worst-case, error-adjusted)
+    speed_alarm_points = []    # speed-triggered (raw current position)
+    heading_alarm_points = []  # wind speed + heading triggered (raw current position)
 
-    help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'c<enter>\' to change circle center lat/lon, \'a<enter>\' to show anchor position, \'s<enter>\' to change speed limit, \'x<enter>\' to toggle short and long output formats, \'p<enter>\' to temporarily pause alarm, \'v<enter>\' to toggle a live view of the recent swing pattern, \'z<enter>\' to clear recorded alarm positions, \'t<enter>\' to test alarm or \'q<enter>\' to quit the program."
+    help_str = "\nHelp: \'h\': Use \'r<enter>\' to change radius limit, \'c<enter>\' to change circle center lat/lon, \'a<enter>\' to show anchor position, \'s<enter>\' to change speed limit, \'w<enter>\' to change wind speed/heading alarm limits, \'x<enter>\' to toggle short and long output formats, \'p<enter>\' to temporarily pause alarm, \'v<enter>\' to toggle a live view of the recent swing pattern, \'z<enter>\' to clear recorded alarm positions, \'t<enter>\' to test alarm or \'q<enter>\' to quit the program."
 
     # This is to prevent the next fix from having the same time and triggering an invalid gps data warning
     sleep(2)
@@ -536,8 +537,16 @@ if __name__ == '__main__':
            buzzer_ctrl.buzzer_light_off()
            # errorSound.play()
 
+      # Always read from nmea_source directly (not whichever source is
+      # currently supplying position) since wind only ever comes from the
+      # masthead unit's own feed. Fetched once per tick and reused below
+      # (heading-alarm trigger, status line) so both see the same reading.
+      wind = nmea_source.get_wind()
+
       if fix.mode != 3 and not ignore_fix_flag:
-        result = alarm.update(fix, reflat, reflon, adist, adata)
+        result = alarm.update(fix, reflat, reflon, adist, adata,
+                               wind_speed_knots=wind.wind_speed_knots,
+                               wind_angle_off_bow=wind.relative_angle_off_bow)
         if result.invalid_fix_is_new:
           print('Invalid gps data at', time.strftime("%D %H:%M:%S", time.localtime()))
       else:
@@ -624,7 +633,9 @@ if __name__ == '__main__':
           #   continue
 
         old_iseq = alarm.iseq
-        result = alarm.update(fix, reflat, reflon, adist, adata)
+        result = alarm.update(fix, reflat, reflon, adist, adata,
+                               wind_speed_knots=wind.wind_speed_knots,
+                               wind_angle_off_bow=wind.relative_angle_off_bow)
 
         if result.bad_distance:
           print("bad distance", result.bad_distance_value, "with speed", speed / KNOTS_TO_MPS, "kt and acceleration", (speed - alarm.avgspeed) / KNOTS_TO_MPS, "kt/tick at", time.strftime("%D %H:%M:%S", time.localtime()))
@@ -644,6 +655,10 @@ if __name__ == '__main__':
             # the way distance does -- the raw current position is the
             # right thing to mark here.
             speed_alarm_points.append(current_offset_this_tick)
+          if alarm.triggered_by_heading:
+            # Same reasoning as speed -- wind/heading has no GPS-error
+            # "worst case" adjustment, so mark the raw current position.
+            heading_alarm_points.append(current_offset_this_tick)
           if result.stale_time and result.stale_time_is_new:
             print("WARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
           if result.iseq_reset:
@@ -664,11 +679,7 @@ if __name__ == '__main__':
           buzzer_on = False
           light_on = False
 
-      # Informational only for now -- see format_wind()/nmea_gps_source.py.
-      # Always read from nmea_source directly (not whichever source is
-      # currently supplying position) since wind only ever comes from the
-      # masthead unit's own feed.
-      wind_text = format_wind(nmea_source.get_wind())
+      wind_text = format_wind(wind)
 
       if show_swing_plot:
         # Clear + redraw in place each tick, like a live radar sweep. This
@@ -679,7 +690,8 @@ if __name__ == '__main__':
         current_offset = position_history[-1] if position_history else None
         sys.stdout.write(swing_plot.render(
             position_history, adist, current=current_offset, error_feet=alarm.pos_error,
-            alarm_points=alarm_points, speed_alarm_points=speed_alarm_points))
+            alarm_points=alarm_points, speed_alarm_points=speed_alarm_points,
+            heading_alarm_points=heading_alarm_points))
         sys.stdout.write('\n\n')
 
       if extended_output:
@@ -699,6 +711,15 @@ if __name__ == '__main__':
         adistset = False
       elif menu == 's':
         speed_set = False
+      elif menu == 'w':
+        alarm.wind_speed_threshold_kt = get_radius(
+          prompt="Enter new wind speed alarm limit in knots (was " +
+                 str(alarm.wind_speed_threshold_kt) + " kt): ")
+        alarm.wind_heading_threshold_deg = get_radius(
+          prompt="Enter new relative wind heading alarm limit in degrees off the bow (was " +
+                 str(alarm.wind_heading_threshold_deg) + " deg): ")
+        print("Wind alarm now triggers above", alarm.wind_speed_threshold_kt, "kt and",
+              alarm.wind_heading_threshold_deg, "degrees off the bow, together.")
       elif menu == 'c':
         print("Change center location")
         templat = get_dd_lat(prompt="Enter new lat in DD to replace current of " + str(reflat) + ": ")
@@ -745,10 +766,11 @@ if __name__ == '__main__':
       elif menu == 'v':
         show_swing_plot = not show_swing_plot
       elif menu == 'z':
-        print("Clearing", len(alarm_points), "distance-alarm and", len(speed_alarm_points),
-              "speed-alarm recorded position(s)")
+        print("Clearing", len(alarm_points), "distance-alarm,", len(speed_alarm_points),
+              "speed-alarm, and", len(heading_alarm_points), "heading-alarm recorded position(s)")
         alarm_points.clear()
         speed_alarm_points.clear()
+        heading_alarm_points.clear()
       elif menu == 't':
         alarm.aset = True
         print("\nTesting alarm")

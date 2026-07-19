@@ -35,11 +35,20 @@ class FixUpdateResult:
 class AlarmState:
     """Tracks smoothed distance/speed/track and the anchor-drag alarm flag."""
 
-    def __init__(self, thresholdspeed, maxaccel, min_sats, ignore_fix_flag=False):
+    def __init__(self, thresholdspeed, maxaccel, min_sats, ignore_fix_flag=False,
+                 wind_speed_threshold_kt=10.0, wind_heading_threshold_deg=45.0):
         self.thresholdspeed = thresholdspeed
         self.maxaccel = maxaccel
         self.min_sats = min_sats
         self.ignore_fix_flag = ignore_fix_flag
+        # Third alarm condition, independent of distance/speed: wind over
+        # this speed AND the boat lying more than this many degrees off the
+        # bow from it at the same time. Wind speed is left in knots (not
+        # converted to/from m/s like boat speed) since WindInfo already
+        # reports it natively in knots -- there's no internal m/s
+        # representation for wind to begin with.
+        self.wind_speed_threshold_kt = wind_speed_threshold_kt
+        self.wind_heading_threshold_deg = wind_heading_threshold_deg
 
         self.icount = 0          # cumulative count of invalid/bad data ticks
         self.iseq = 0            # consecutive bad-data ticks right now
@@ -60,14 +69,21 @@ class AlarmState:
         self.aset = False        # is the drag alarm currently active
         self.triggered_by_distance = False  # avgdist alone exceeded effective_radius this tick
         self.triggered_by_speed = False      # avgspeed alone exceeded thresholdspeed this tick
+        self.triggered_by_heading = False    # wind speed AND relative heading both over threshold
         self.utc = None          # last-seen gpsd fix time, to detect a stalled feed
 
-    def update(self, fix, reflat, reflon, adist, adata=False):
+    def update(self, fix, reflat, reflon, adist, adata=False,
+               wind_speed_knots=None, wind_angle_off_bow=None):
         """Feed one gpsd fix through the alarm decision logic.
 
         adist is the user-configured alarm radius in feet; adata is an
         externally-driven "data source is stalled" override (e.g. from a
         logger process healthcheck) that forces the alarm on.
+
+        wind_speed_knots/wind_angle_off_bow (from nmea_gps_source.WindInfo)
+        drive the heading-based trigger -- pass None for either (e.g. no
+        masthead feed, or wind data stale) to leave it untriggerable rather
+        than guessing.
         """
         result = FixUpdateResult()
 
@@ -145,9 +161,17 @@ class AlarmState:
 
         self.triggered_by_distance = self.avgdist > self.effective_radius
         self.triggered_by_speed = self.avgspeed > self.thresholdspeed
+        self.triggered_by_heading = bool(
+            wind_speed_knots is not None
+            and wind_angle_off_bow is not None
+            and wind_speed_knots > self.wind_speed_threshold_kt
+            and wind_angle_off_bow > self.wind_heading_threshold_deg
+        )
 
         was_set = self.aset
-        self.aset = bool(adata or self.triggered_by_distance or self.triggered_by_speed)
+        self.aset = bool(
+            adata or self.triggered_by_distance or self.triggered_by_speed or self.triggered_by_heading
+        )
         result.alarm_triggered = self.aset and not was_set
         result.alarm_cleared = was_set and not self.aset
 
