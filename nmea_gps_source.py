@@ -29,9 +29,21 @@ frequency GPS accuracy figure rather than a measured value. NMEA has no
 standard speed-error sentence at all (gpsd's eps is derived internally,
 not read off the wire), so speed error is approximated the same way,
 scaled by HDOP.
+
+MWV (wind angle/speed) is also parsed, separately from position -- see
+get_wind() -- as an input for a future drag heuristic: a boat properly
+anchored generally lies with the wind somewhere near the bow, while a
+real drag can turn it beam-on. Raw relative wind angle is noisy on its
+own (normal yaw, "sailing" at anchor), and in particular in light air a
+boat can spin freely with no wind pressure to hold any heading at all --
+so get_wind() smooths the angle and only updates that smoothed value
+while wind speed is above a minimum threshold, leaving it at its last
+trustworthy reading (and flagging low_wind) rather than incorporating
+meaningless spin into the average.
 """
 import socket
 import time as time_module
+from dataclasses import dataclass
 
 import pynmea2
 
@@ -63,6 +75,30 @@ DEFAULT_UERE_METERS = 5.0
 DEFAULT_SPEED_UERE_MPS = 0.5
 
 KNOTS_TO_MPS = 0.514444
+
+# MWV wind speed unit codes -> knots.
+WIND_SPEED_UNIT_TO_KNOTS = {
+    'K': 0.539957,  # km/h
+    'M': 1.943844,  # m/s
+    'N': 1.0,       # knots
+    'S': 0.868976,  # statute mph
+}
+
+# Below this true wind speed, an anchored boat commonly has too little wind
+# pressure to hold a heading at all and can wander/spin freely -- a rough
+# seamanship threshold, not a precise figure. Below it, the smoothed
+# relative-wind-angle reading is frozen rather than averaging in spin noise.
+MIN_WIND_SPEED_FOR_HEADING_KNOTS = 5.0
+
+# Same 0.8/0.2 exponential smoothing used throughout alarm_state.py.
+WIND_ANGLE_SMOOTHING = 0.8
+
+
+@dataclass
+class WindInfo:
+    relative_angle_off_bow: float = None  # smoothed, 0 (dead ahead) - 180 (dead astern) degrees
+    wind_speed_knots: float = None        # latest raw reading
+    low_wind: bool = True                 # True if current wind is below the trust threshold
 
 
 class NmeaGpsSource:
@@ -100,6 +136,9 @@ class NmeaGpsSource:
         self._speed_mps = 0.0
         self._track = 0.0
 
+        self._wind_speed_knots = None       # latest raw reading, updated any time MWV is valid
+        self._relative_angle_off_bow = None  # smoothed; only updated while wind is above the threshold
+
     def connect(self):
         self._sock = socket.create_connection((self.host, self.port), timeout=CONNECT_TIMEOUT)
         self._sock.settimeout(0.2)
@@ -131,6 +170,8 @@ class NmeaGpsSource:
             self._ingest_gsa(msg)
         elif sentence == 'VTG':
             self._ingest_vtg(msg)
+        elif sentence == 'MWV':
+            self._ingest_mwv(msg)
         else:
             return
         self._last_sentence_at = time_module.monotonic()
@@ -172,6 +213,60 @@ class NmeaGpsSource:
             self._speed_mps = float(msg.spd_over_grnd_kts) * KNOTS_TO_MPS
         if msg.true_track is not None:
             self._track = msg.true_track
+
+    def _ingest_mwv(self, msg):
+        # Only relative-to-bow readings are useful here -- a "true" (T)
+        # angle is relative to true north, which would need heading folded
+        # back in to get "how far off the bow", reintroducing exactly the
+        # compass-compounding noise using the relative reading avoids.
+        if msg.reference != 'R' or msg.status != 'A':
+            return
+        if msg.wind_speed is None:
+            return
+        unit_factor = WIND_SPEED_UNIT_TO_KNOTS.get(msg.wind_speed_units)
+        if unit_factor is None:
+            return
+        self._wind_speed_knots = float(msg.wind_speed) * unit_factor
+
+        if msg.wind_angle is None:
+            return
+        raw_angle = float(msg.wind_angle) % 360
+        # Collapse to "degrees off the bow" (0=dead ahead, 180=dead astern)
+        # regardless of which side the wind's on -- only the magnitude of
+        # the deviation from head-to-wind matters for this purpose.
+        angle_off_bow = min(raw_angle, 360 - raw_angle)
+
+        if self._wind_speed_knots < MIN_WIND_SPEED_FOR_HEADING_KNOTS:
+            # Too little wind to trust the boat is actually lying to it --
+            # leave the smoothed reading at its last trustworthy value
+            # instead of averaging in what's likely just aimless spin.
+            return
+        if self._relative_angle_off_bow is None:
+            self._relative_angle_off_bow = angle_off_bow
+        else:
+            self._relative_angle_off_bow = (
+                WIND_ANGLE_SMOOTHING * self._relative_angle_off_bow
+                + (1 - WIND_ANGLE_SMOOTHING) * angle_off_bow
+            )
+
+    def get_wind(self):
+        """Latest wind reading -- see WindInfo and this module's docstring.
+
+        Returns a blank WindInfo (nothing frozen/stale left showing) if the
+        masthead feed itself is down -- same staleness check used for the
+        GPS fix, since MWV comes over the same connection as everything
+        else here.
+        """
+        if self.is_stale():
+            return WindInfo(relative_angle_off_bow=None, wind_speed_knots=None, low_wind=True)
+        return WindInfo(
+            relative_angle_off_bow=self._relative_angle_off_bow,
+            wind_speed_knots=self._wind_speed_knots,
+            low_wind=(
+                self._wind_speed_knots is None
+                or self._wind_speed_knots < MIN_WIND_SPEED_FOR_HEADING_KNOTS
+            ),
+        )
 
     def _ingest_gsa(self, msg):
         if msg.mode_fix_type:

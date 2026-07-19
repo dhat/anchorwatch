@@ -250,6 +250,40 @@ if __name__ == '__main__':
     return val
 
 
+  def safe_precision(fix):
+    """fix.position_precision(), without the crash.
+
+    gpsd.GpsResponse.position_precision() raises NoFixError if mode < 2 --
+    fine deep in the main loop (only ever called once fix.mode == 3 is
+    already confirmed), but these diagnostic status dumps print precision
+    for whatever fix just came back, including while still waiting for a
+    good one. An unguarded call there used to escape to the top-level
+    "General failure exception" handler and kill the whole program the
+    first time a fix without at least a 2D lock came back, instead of
+    just continuing to wait/retry like the loop is supposed to.
+    """
+    if fix.mode < 2:
+      return '(no fix yet)'
+    return fix.position_precision()
+
+
+  def format_wind(wind):
+    """One compact status-line segment for a nmea_gps_source.WindInfo.
+
+    Informational only, for now -- not wired into the alarm decision. See
+    nmea_gps_source.py for why low wind freezes the smoothed angle instead
+    of showing it drift with spin.
+    """
+    if wind.relative_angle_off_bow is None:
+      return 'Wind=--'
+    text = 'Wind=%.0fdegOffBow' % wind.relative_angle_off_bow
+    if wind.wind_speed_knots is not None:
+      text += '/%.1fkt' % wind.wind_speed_knots
+    if wind.low_wind:
+      text += '(light)'
+    return text
+
+
   def get_dd_lat(prompt='Enter Center latitude in DD between -90 and 90 degrees:'):
     while True:
       try:
@@ -356,7 +390,7 @@ if __name__ == '__main__':
       print('track       ', fix.track)
       print('total sats  ', fix.sats)
       print('used sats   ', fix.sats_valid)
-      print('precision   ', fix.position_precision())
+      print('precision   ', safe_precision(fix))
       print('errors      ', fix.error)
       print('mode        ', fix.mode)
       # print('status      ', fix.status)
@@ -398,7 +432,7 @@ if __name__ == '__main__':
     print('track       ', fix.track)
     print('total sats  ', fix.sats)
     print('used sats   ', fix.sats_valid)
-    print('precision   ', fix.position_precision())
+    print('precision   ', safe_precision(fix))
     print('errors      ', fix.error)
     print('mode        ', fix.mode)
     # print('status      ', fix.status)
@@ -627,6 +661,12 @@ if __name__ == '__main__':
           buzzer_on = False
           light_on = False
 
+      # Informational only for now -- see format_wind()/nmea_gps_source.py.
+      # Always read from nmea_source directly (not whichever source is
+      # currently supplying position) since wind only ever comes from the
+      # masthead unit's own feed.
+      wind_text = format_wind(nmea_source.get_wind())
+
       if show_swing_plot:
         # Clear + redraw in place each tick, like a live radar sweep. This
         # also clears away any messages printed above (alarm triggered,
@@ -640,12 +680,12 @@ if __name__ == '__main__':
         sys.stdout.write('\n\n')
 
       if extended_output:
-        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.2f mps/%.2f maxmps/%.2f errmps: filtered=%.2f mps/%.2f maxmps/%.2f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror))
+        sys.stdout.write('\rAlarm=%d: Cnt=%d: Center=%d ft/%03.0f degT/%d maxft/%.1f errft: filtered=%d ft/%d maxft/%.1f alarmft: Speed=%.2f mps/%.2f maxmps/%.2f errmps: filtered=%.2f mps/%.2f maxmps/%.2f alarmmps: Ivld=%d/%d: sats=%d/%d: AvgErr=%0.1fft/%0.1fmax-err: %s:       ' % (alarm.aset, acount, alarm.distance, alarm.bearing, alarm.mrawdist, precision[0] * feet_per_meter, alarm.avgdist, alarm.mdist, alarm.effective_radius, alarm.speed, alarm.mrawspeed, fix_error['s'], alarm.avgspeed, alarm.maxspeed, alarm.thresholdspeed, alarm.icount, runcount, fix.sats_valid, fix.sats, alarm.pos_error, alarm.maxerror, wind_text))
       # sys.stdout.write('\rAlarm=%d: Cnt=%d: RawRad/mx=%d/%dfeet: SmRad/mx/lmt=%d/%d/%dft: RawSpd/mx=%.1f/%.1fm/s: SmSpd/mx/lmt=%.1f/%.1f/%.1fm/s: Trk/avg=%.1f/%.1fD: Ivd=%d/%d   ' % (aset,  acount, distance, mrawdist, avgdist, mdist, adist, speed, mrawspeed, avgspeed, maxspeed, thresholdspeed, track, avgtrack, icount, runcount))
       else:
         sys.stdout.write(
-          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.2fmps/%.2falarm-mps %.2fmax-mps %.2ferr-mps:: Ivld=%d/%d:: sats=%d/%d::       ' % (
-          alarm.aset, acount, alarm.avgdist, alarm.effective_radius, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed, alarm.thresholdspeed, alarm.maxspeed, fix_error['s'], alarm.icount, runcount, fix.sats_valid, fix.sats))
+          '\rAlarm=%d: Cnt=%d: Center=%dft/%.1falarm-ft %03.0fdegT %dmax-ft %0.1ferr-ft/%0.1fmax-err:: Speed=%.2fmps/%.2falarm-mps %.2fmax-mps %.2ferr-mps:: Ivld=%d/%d:: sats=%d/%d:: %s::       ' % (
+          alarm.aset, acount, alarm.avgdist, alarm.effective_radius, alarm.bearing, alarm.mdist, alarm.pos_error, alarm.maxerror, alarm.avgspeed, alarm.thresholdspeed, alarm.maxspeed, fix_error['s'], alarm.icount, runcount, fix.sats_valid, fix.sats, wind_text))
       sys.stdout.flush()  # to clear when using \r
       menu = non_blocking_raw_Input('')
       if menu == 'q':

@@ -15,6 +15,13 @@ GGA_NO_FIX = "$GPGGA,190002,,,,,0,00,,,M,,M,,*6C"
 VTG_GOOD = "$GPVTG,164.7,T,153.2,M,5.5,N,10.2,K,D*14"
 VTG_NOT_VALID = "$GPVTG,164.7,T,153.2,M,0.0,N,0.0,K,N*2D"
 VTG_LEGACY_NO_MODE = "$GPVTG,164.7,T,153.2,M,3.0,N,5.6,K*4F"
+# Matches the real captured live feed: wind ~30deg off the bow, 8kt.
+MWV_GOOD = "$WIMWV,29.8,R,8.0,N,A*18"
+MWV_BEAM_ON = "$WIMWV,90.0,R,10.0,N,A*2B"
+MWV_LIGHT_WIND = "$WIMWV,45.0,R,2.0,N,A*10"
+MWV_TRUE_REFERENCE = "$WIMWV,15.0,T,8.0,N,A*19"
+MWV_INVALID_STATUS = "$WIMWV,20.0,R,8.0,N,V*0E"
+MWV_NEAR_ZERO_WRAP = "$WIMWV,350.0,R,10.0,N,A*14"
 
 
 def _free_port():
@@ -94,6 +101,95 @@ class NmeaGpsSourceTests(unittest.TestCase):
         fix = source._build_fix()
         self.assertAlmostEqual(fix.hspeed, 3.0 * 0.514444, places=5)
         self.assertAlmostEqual(fix.track, 164.7)
+
+    def test_wind_starts_with_no_reading(self):
+        source = NmeaGpsSource()
+        wind = source.get_wind()
+        self.assertIsNone(wind.relative_angle_off_bow)
+        self.assertIsNone(wind.wind_speed_knots)
+        self.assertTrue(wind.low_wind)
+
+    def test_mwv_supplies_relative_angle_and_speed(self):
+        # Matches the real captured live feed exactly.
+        source = NmeaGpsSource()
+        source.ingest_line(MWV_GOOD)
+        wind = source.get_wind()
+        self.assertAlmostEqual(wind.wind_speed_knots, 8.0)
+        self.assertAlmostEqual(wind.relative_angle_off_bow, 29.8)
+        self.assertFalse(wind.low_wind)
+
+    def test_beam_on_wind_reports_angle_near_90(self):
+        source = NmeaGpsSource()
+        source.ingest_line(MWV_BEAM_ON)
+        wind = source.get_wind()
+        self.assertAlmostEqual(wind.relative_angle_off_bow, 90.0)
+
+    def test_angle_off_bow_collapses_port_starboard_near_360(self):
+        # 350deg (nearly dead ahead from the other side) should collapse to
+        # "10deg off the bow", not stay as a large near-360 number.
+        source = NmeaGpsSource()
+        source.ingest_line(MWV_NEAR_ZERO_WRAP)
+        wind = source.get_wind()
+        self.assertAlmostEqual(wind.relative_angle_off_bow, 10.0)
+
+    def test_true_reference_wind_is_ignored(self):
+        # Only relative-to-bow readings are used -- a true-referenced angle
+        # would need heading folded back in, reintroducing compass noise.
+        source = NmeaGpsSource()
+        source.ingest_line(MWV_TRUE_REFERENCE)
+        wind = source.get_wind()
+        self.assertIsNone(wind.relative_angle_off_bow)
+        self.assertIsNone(wind.wind_speed_knots)
+
+    def test_invalid_status_wind_is_ignored(self):
+        source = NmeaGpsSource()
+        source.ingest_line(MWV_INVALID_STATUS)
+        wind = source.get_wind()
+        self.assertIsNone(wind.relative_angle_off_bow)
+
+    def test_light_wind_does_not_update_the_smoothed_angle(self):
+        # Regression test for the core ask: in light air a boat can spin
+        # freely with nothing holding a heading, so a low-wind reading
+        # should not be averaged into the smoothed signal at all.
+        source = NmeaGpsSource()
+        source.ingest_line(MWV_GOOD)  # establishes a trustworthy baseline (8kt, 29.8deg)
+        baseline = source.get_wind().relative_angle_off_bow
+        source.ingest_line(MWV_LIGHT_WIND)  # 2kt, 45deg -- should be ignored
+        wind = source.get_wind()
+        self.assertEqual(wind.relative_angle_off_bow, baseline)
+        self.assertTrue(wind.low_wind)
+        # The raw wind speed itself still updates, just not the smoothed angle.
+        self.assertAlmostEqual(wind.wind_speed_knots, 2.0)
+
+    def test_wind_goes_blank_when_feed_is_stale(self):
+        # Regression test: get_wind() used to keep returning the last
+        # known reading forever even after the masthead feed itself went
+        # stale, with nothing indicating it was outdated.
+        source = NmeaGpsSource(stale_after=0.01)
+        source.ingest_line(MWV_GOOD)
+        self.assertIsNotNone(source.get_wind().relative_angle_off_bow)
+        time.sleep(0.02)
+        wind = source.get_wind()
+        self.assertIsNone(wind.relative_angle_off_bow)
+        self.assertIsNone(wind.wind_speed_knots)
+        self.assertTrue(wind.low_wind)
+
+    def test_low_wind_flag_reflects_current_reading_not_history(self):
+        source = NmeaGpsSource()
+        source.ingest_line(MWV_GOOD)
+        self.assertFalse(source.get_wind().low_wind)
+        source.ingest_line(MWV_LIGHT_WIND)
+        self.assertTrue(source.get_wind().low_wind)
+
+    def test_relative_angle_smooths_across_multiple_readings(self):
+        source = NmeaGpsSource()
+        source.ingest_line(MWV_GOOD)       # 29.8deg
+        first = source.get_wind().relative_angle_off_bow
+        source.ingest_line(MWV_BEAM_ON)    # 90.0deg
+        second = source.get_wind().relative_angle_off_bow
+        # Should move toward 90 but not jump there in one tick.
+        self.assertGreater(second, first)
+        self.assertLess(second, 90.0)
 
     def test_no_fix_gga_sets_mode_to_1_and_keeps_last_good_position(self):
         source = NmeaGpsSource()
