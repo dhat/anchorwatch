@@ -133,6 +133,17 @@ class AlarmStateTests(unittest.TestCase):
         result = state.update(fix, REF_LAT, REF_LON, adist=50)
         self.assertTrue(result.bad_distance)
         self.assertEqual(state.distance, 0.0)
+        # regression: bad_distance_value must carry the offending raw
+        # distance (callers print it), not be left at the dataclass default
+        # while state.distance gets zeroed out.
+        self.assertGreater(result.bad_distance_value, 0.0)
+
+    def test_nan_distance_rejected_as_bad_distance_with_nan_value(self):
+        state = self.make_state()
+        fix = FakeFix(float("nan"), REF_LON, time="t1")
+        result = state.update(fix, REF_LAT, REF_LON, adist=50)
+        self.assertTrue(result.bad_distance)
+        self.assertTrue(math.isnan(result.bad_distance_value))
 
     def test_nan_speed_is_flagged_and_zeroed(self):
         state = self.make_state()

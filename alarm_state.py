@@ -23,6 +23,7 @@ class FixUpdateResult:
     invalid_fix: bool = False       # fix.mode != 3 (and not ignoring fix quality)
     invalid_fix_is_new: bool = False  # first invalid fix in a new bad streak
     bad_distance: bool = False      # distance was nan, or speed jump exceeded maxaccel
+    bad_distance_value: float = 0.0  # the offending raw distance, before it's zeroed out
     stale_time: bool = False        # gpsd time did not advance since last tick
     stale_time_is_new: bool = False   # first stale-time tick in a new bad streak
     iseq_reset: bool = False        # iseq just dropped back to 0 (recovered from a bad streak)
@@ -108,6 +109,7 @@ class AlarmState:
 
         if math.isnan(self.distance) or self.speed > self.avgspeed + self.maxaccel:
             result.bad_distance = True
+            result.bad_distance_value = self.distance
             self.distance = 0.0
             self.icount += 1
             self.iseq += 1
