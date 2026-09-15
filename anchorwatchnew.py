@@ -478,16 +478,19 @@ if __name__ == '__main__':
     # Recent (east_feet, north_feet) offsets from center, for the 'v' swing-
     # pattern view -- see swing_plot.py. A real drag tends to show up here as
     # points clustering in an arc and walking outward, often before the
-    # alarm radius itself is crossed. Capped by maxlen rather than a time
-    # window for simplicity; at the ~2-4s loop cadence that's roughly the
-    # last 10-20 minutes.
-    position_history = deque(maxlen=300)
+    # alarm radius itself is crossed. Unbounded, like alarm_points below --
+    # a tide/wind-driven swing can take much longer than a few minutes to
+    # trace its full arc, and a maxlen here (previously 300, ~10-20 minutes
+    # at the ~2-4s loop cadence) rolled off exactly the older points needed
+    # to see that arc, leaving only a small recent cluster on screen.
+    position_history = deque()
 
     # Offsets recorded every tick the alarm was actively sounding, split by
-    # which condition triggered it. Unlike position_history these are
-    # unbounded and never roll off on their own -- a record of past alarm
-    # episodes the user explicitly asked to be able to review across the
-    # whole session, cleared only on demand ('z').
+    # which condition triggered it. Like position_history, unbounded and
+    # never roll off on their own -- a record of past alarm episodes the
+    # user explicitly asked to be able to review across the whole session,
+    # cleared only on demand ('z'). Unlike position_history, 'z' clears
+    # these but not the swing track itself (see the 'z' handler below).
     alarm_points = []          # distance-triggered (worst-case, error-adjusted)
     speed_alarm_points = []    # speed-triggered (raw current position)
     heading_alarm_points = []  # wind speed + heading triggered (raw current position)
