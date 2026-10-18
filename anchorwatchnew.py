@@ -531,7 +531,7 @@ if __name__ == '__main__':
             buzzer_ctrl.buzzer_off()
             buzzer_on = False
           if not light_on:
-            print("Alarm triggered", time.strftime("%D %H:%M:%S", time.localtime()))
+            print("\nAlarm triggered", time.strftime("%D %H:%M:%S", time.localtime()))
             acount += 1
             buzzer_ctrl.light_on()
             light_on = True
@@ -541,7 +541,7 @@ if __name__ == '__main__':
           alertSound.play()
 
         if alarm.iseq > maxiseq:
-           print("Invalid gps", alarm.iseq, "times which is over threshold of", maxiseq)
+           print("\nInvalid gps", alarm.iseq, "times which is over threshold of", maxiseq)
            buzzer_ctrl.light_on()
            buzzer_ctrl.buzzer_once()
            sleep(1)
@@ -559,7 +559,7 @@ if __name__ == '__main__':
                                wind_speed_knots=wind.wind_speed_knots,
                                wind_angle_off_bow=wind.relative_angle_off_bow)
         if result.invalid_fix_is_new:
-          print('Invalid gps data at', time.strftime("%D %H:%M:%S", time.localtime()))
+          print('\nInvalid gps data at', time.strftime("%D %H:%M:%S", time.localtime()))
       else:
         lat = float(fix.lat)
         lon = float(fix.lon)
@@ -649,7 +649,7 @@ if __name__ == '__main__':
                                wind_angle_off_bow=wind.relative_angle_off_bow)
 
         if result.bad_distance:
-          print("bad distance", result.bad_distance_value, "with speed", speed / KNOTS_TO_MPS, "kt and acceleration", (speed - alarm.avgspeed) / KNOTS_TO_MPS, "kt/tick at", time.strftime("%D %H:%M:%S", time.localtime()))
+          print("\nbad distance", result.bad_distance_value, "with speed", speed / KNOTS_TO_MPS, "kt and acceleration", (speed - alarm.avgspeed) / KNOTS_TO_MPS, "kt/tick at", time.strftime("%D %H:%M:%S", time.localtime()))
         else:
           current_offset_this_tick = offset_from_center(reflat, reflon, lat, lon)
           position_history.append(current_offset_this_tick)
@@ -671,21 +671,21 @@ if __name__ == '__main__':
             # "worst case" adjustment, so mark the raw current position.
             heading_alarm_points.append(current_offset_this_tick)
           if result.stale_time and result.stale_time_is_new:
-            print("WARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+            print("\nWARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
           if result.iseq_reset:
-            print("Resetting iseq from", old_iseq, " to 0 at", time.strftime("%D %H:%M:%S", time.localtime()))
+            print("\nResetting iseq from", old_iseq, " to 0 at", time.strftime("%D %H:%M:%S", time.localtime()))
             buzzer_ctrl.buzzer_light_off()
             buzzer_on = False
             light_on = False
 
           if result.bad_speed:
-            print("bad speed", speed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+            print("\nbad speed", speed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
 
           if result.low_sats:
-            print("Not enough sats tracked:", fix.sats_valid, "out of", fix.sats, "total with min sats:", min_sats, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+            print("\nNot enough sats tracked:", fix.sats_valid, "out of", fix.sats, "total with min sats:", min_sats, "at", time.strftime("%D %H:%M:%S", time.localtime()))
 
         if result.alarm_cleared:
-          print("Alarm cleared at", time.strftime("%D %H:%M:%S", time.localtime()))
+          print("\nAlarm cleared at", time.strftime("%D %H:%M:%S", time.localtime()))
           buzzer_ctrl.buzzer_light_off()
           buzzer_on = False
           light_on = False
