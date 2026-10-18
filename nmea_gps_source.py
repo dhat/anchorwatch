@@ -13,16 +13,20 @@ strand the program on the less accurate puck.
 
 GGA, RMC, GSA and VTG sentences are used:
   GGA gives fix quality, lat/lon, satellite count, HDOP, altitude, time.
-  RMC gives speed over ground and course, plus an independent A/V validity
-    check.
+  RMC gives speed over ground and course, an independent A/V validity
+    check, and time.
   GSA gives fix dimensionality (2D/3D) and VDOP, and a satellite-used count
     as a fallback if a GGA hasn't arrived yet this cycle.
   VTG also gives speed over ground and course. Some multiplexers (this
-    boat's masthead unit among them) never emit RMC at all -- only GGA,
-    GSA/GSV-less position sentences, and VTG for speed/track -- so relying
-    on RMC alone silently left speed stuck at 0 on that feed. Whichever of
-    RMC/VTG is actually present updates speed/track; if both arrive, the
-    most recent one wins, same as every other field here.
+    boat's masthead unit among them, at least at one point) are known to
+    have gone a while without emitting RMC at all -- only GGA, GSA/GSV-less
+    position sentences, and VTG for speed/track -- so relying on RMC alone
+    silently left speed stuck at 0 on that feed. Whichever of RMC/VTG is
+    actually present updates speed/track; if both arrive, the most recent
+    one wins, same as every other field here (including time, below: GGA
+    and RMC both update it, most-recent-wins, so a single missed GGA
+    doesn't by itself look like the feed's clock has stopped if RMC is
+    present and still advancing).
 There's no GST sentence assumed available, so horizontal/vertical position
 error estimates are approximated from HDOP/VDOP using a typical single-
 frequency GPS accuracy figure rather than a measured value. NMEA has no
@@ -202,6 +206,8 @@ class NmeaGpsSource:
                 self._speed_mps = msg.spd_over_grnd * KNOTS_TO_MPS
             if msg.true_course is not None:
                 self._track = msg.true_course
+            if msg.timestamp:
+                self._time = msg.timestamp.isoformat()
 
     def _ingest_vtg(self, msg):
         # faa_mode is a NMEA 2.3+ addition: 'N' means "not valid", blank/

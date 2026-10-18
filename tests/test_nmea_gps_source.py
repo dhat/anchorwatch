@@ -7,6 +7,9 @@ from nmea_gps_source import NmeaGpsSource
 
 GGA_GOOD = "$GPGGA,190001,4200.0000,N,07000.0000,W,1,09,0.9,23.0,M,-33.4,M,,*40"
 RMC_GOOD = "$GPRMC,190001,A,4200.0000,N,07000.0000,W,000.1,151.0,180726,,,A*64"
+# Same fix as RMC_GOOD, but a later timestamp -- for proving RMC advances
+# the fix's time on its own, not just whatever GGA last set.
+RMC_LATER_TIME = "$GPRMC,190010,A,4200.0000,N,07000.0000,W,000.1,151.0,180726,,,A*64"
 GSA_3D = "$GPGSA,A,3,04,05,09,12,15,18,21,24,,,,,1.8,0.9,1.6*36"
 GGA_NO_FIX = "$GPGGA,190002,,,,,0,00,,,M,,M,,*6C"
 # Real sentence shape from the boat's actual masthead multiplexer, which
@@ -73,6 +76,23 @@ class NmeaGpsSourceTests(unittest.TestCase):
         fix = source._build_fix()
         self.assertAlmostEqual(fix.hspeed, 0.1 * 0.514444, places=5)
         self.assertAlmostEqual(fix.track, 151.0)
+
+    def test_rmc_also_advances_fix_time_on_its_own(self):
+        # Regression: a GGA-only time field meant a single missed GGA sentence
+        # looked exactly like the feed's clock had stopped (AlarmState's
+        # stale-time check), even on a tick where a fresh RMC did arrive.
+        source = NmeaGpsSource()
+        source.ingest_line(GGA_GOOD)  # time 19:00:01
+        source.ingest_line(RMC_LATER_TIME)  # time 19:00:10, no GGA this cycle
+        fix = source._build_fix()
+        self.assertEqual(fix.time, "19:00:10+00:00")
+
+    def test_gga_after_rmc_is_still_the_most_recent_time(self):
+        source = NmeaGpsSource()
+        source.ingest_line(RMC_LATER_TIME)  # time 19:00:10
+        source.ingest_line(GGA_GOOD)        # time 19:00:01, arrives after
+        fix = source._build_fix()
+        self.assertEqual(fix.time, "19:00:01+00:00")
 
     def test_vtg_supplies_speed_and_track(self):
         # Regression test: this boat's actual masthead feed never sends
