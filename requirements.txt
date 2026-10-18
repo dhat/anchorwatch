@@ -1,8 +1,5 @@
-# gps==3.19
-gpsd-py3
-pygame
-#==2.1.2
-pyserial
-#==3.5
-haversine
-pynmea2
+gpsd-py3==0.3.0
+pygame-ce==2.5.8
+pyserial==3.5
+haversine==2.9.0
+pynmea2==1.19.0
