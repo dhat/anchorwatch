@@ -115,6 +115,52 @@ class AlarmStateTests(unittest.TestCase):
         self.assertTrue(result.stale_time)
         self.assertEqual(state.icount, 1)
 
+    def test_single_stale_tick_is_tolerated_without_a_warning(self):
+        # A single missed/delayed sentence on a live feed is common and
+        # usually self-corrects next tick -- shouldn't warn on tick one,
+        # even though stale_time itself is still (correctly) flagged.
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, time="same")
+        state.update(fix, REF_LAT, REF_LON, adist=50)
+        result = state.update(fix, REF_LAT, REF_LON, adist=50)
+        self.assertTrue(result.stale_time)
+        self.assertFalse(result.stale_time_is_new)
+
+    def test_warns_once_time_is_stuck_for_a_second_consecutive_tick(self):
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, time="same")
+        state.update(fix, REF_LAT, REF_LON, adist=50)
+        state.update(fix, REF_LAT, REF_LON, adist=50)   # 1st stale tick, tolerated
+        result = state.update(fix, REF_LAT, REF_LON, adist=50)  # 2nd stale tick
+        self.assertTrue(result.stale_time_is_new)
+
+    def test_stuck_time_does_not_warn_again_every_tick_after_that(self):
+        state = self.make_state()
+        fix = FakeFix(REF_LAT, REF_LON, time="same")
+        state.update(fix, REF_LAT, REF_LON, adist=50)
+        state.update(fix, REF_LAT, REF_LON, adist=50)
+        state.update(fix, REF_LAT, REF_LON, adist=50)  # warns here
+        result = state.update(fix, REF_LAT, REF_LON, adist=50)  # still stale, 3rd in a row
+        self.assertTrue(result.stale_time)
+        self.assertFalse(result.stale_time_is_new)
+
+    def test_stale_tick_tolerance_resets_after_recovering(self):
+        # A fresh recovery, then a brand new stale streak, should tolerate
+        # one stale tick again rather than warning immediately -- the
+        # tolerance isn't a one-time allowance for the whole session.
+        state = self.make_state()
+        stuck_fix = FakeFix(REF_LAT, REF_LON, time="t1")
+        state.update(stuck_fix, REF_LAT, REF_LON, adist=50)
+        state.update(stuck_fix, REF_LAT, REF_LON, adist=50)  # warns (2nd stale tick)
+
+        fresh_fix = FakeFix(REF_LAT, REF_LON, time="t2")
+        state.update(fresh_fix, REF_LAT, REF_LON, adist=50)  # recovers
+
+        stuck_again = FakeFix(REF_LAT, REF_LON, time="t2")
+        result = state.update(stuck_again, REF_LAT, REF_LON, adist=50)
+        self.assertTrue(result.stale_time)
+        self.assertFalse(result.stale_time_is_new)
+
     def test_iseq_reset_reported_after_recovering_from_bad_streak(self):
         state = self.make_state()
         bad_fix = FakeFix(REF_LAT, REF_LON, mode=1, time="t1")

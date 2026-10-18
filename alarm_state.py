@@ -17,6 +17,15 @@ from geo import calc_distance, calc_bearing
 
 FEET_PER_METER = 3.28084
 
+# Consecutive ticks a fix's time can repeat before stale_time_is_new fires.
+# A single missed/delayed sentence on a live NMEA feed (e.g. a multiplexer
+# skipping a beat under load) is common and self-corrects a tick later;
+# only a time that's *still* stuck after this many ticks is worth a
+# warning. stale_time itself is still flagged (and iseq/icount still
+# incremented) starting on the very first stale tick -- only the warning
+# is held back.
+STALE_TIME_WARN_AFTER_TICKS = 2
+
 
 @dataclass
 class FixUpdateResult:
@@ -25,7 +34,7 @@ class FixUpdateResult:
     bad_distance: bool = False      # distance was nan, or speed jump exceeded maxaccel
     bad_distance_value: float = 0.0  # the offending raw distance, before it's zeroed out
     stale_time: bool = False        # gpsd time did not advance since last tick
-    stale_time_is_new: bool = False   # first stale-time tick in a new bad streak
+    stale_time_is_new: bool = False   # just crossed STALE_TIME_WARN_AFTER_TICKS in a new bad streak
     iseq_reset: bool = False        # iseq just dropped back to 0 (recovered from a bad streak)
     bad_speed: bool = False         # speed was nan
     low_sats: bool = False          # fewer than min_sats satellites used
@@ -72,6 +81,7 @@ class AlarmState:
         self.triggered_by_speed = False      # avgspeed alone exceeded thresholdspeed this tick
         self.triggered_by_heading = False    # wind speed AND relative heading both over threshold
         self.utc = None          # last-seen gpsd fix time, to detect a stalled feed
+        self._consecutive_stale_time = 0  # ticks fix.time has repeated, for STALE_TIME_WARN_AFTER_TICKS
 
     def update(self, fix, reflat, reflon, adist, adata=False,
                wind_speed_knots=None, wind_angle_off_bow=None):
@@ -116,11 +126,13 @@ class AlarmState:
         else:
             if self.utc == fix.time:
                 result.stale_time = True
-                result.stale_time_is_new = (self.iseq == 0)
+                self._consecutive_stale_time += 1
+                result.stale_time_is_new = (self._consecutive_stale_time == STALE_TIME_WARN_AFTER_TICKS)
                 self.icount += 1
                 self.iseq += 1
             else:
                 self.utc = fix.time
+                self._consecutive_stale_time = 0
                 if self.iseq > 0:
                     result.iseq_reset = True
                 self.iseq = 0
