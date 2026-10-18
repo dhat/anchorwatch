@@ -113,18 +113,23 @@ class AlarmStateTests(unittest.TestCase):
         state.update(fix, REF_LAT, REF_LON, adist=50)
         result = state.update(fix, REF_LAT, REF_LON, adist=50)
         self.assertTrue(result.stale_time)
-        self.assertEqual(state.icount, 1)
+        # A single stale tick is within tolerance -- flagged, but a true
+        # no-op for the bad-data counters (see test_single_stale_tick_*).
+        self.assertEqual(state.icount, 0)
 
     def test_single_stale_tick_is_tolerated_without_a_warning(self):
         # A single missed/delayed sentence on a live feed is common and
         # usually self-corrects next tick -- shouldn't warn on tick one,
-        # even though stale_time itself is still (correctly) flagged.
+        # or count against iseq/icount at all, even though stale_time
+        # itself is still (correctly) flagged.
         state = self.make_state()
         fix = FakeFix(REF_LAT, REF_LON, time="same")
         state.update(fix, REF_LAT, REF_LON, adist=50)
         result = state.update(fix, REF_LAT, REF_LON, adist=50)
         self.assertTrue(result.stale_time)
         self.assertFalse(result.stale_time_is_new)
+        self.assertEqual(state.icount, 0)
+        self.assertEqual(state.iseq, 0)
 
     def test_warns_once_time_is_stuck_for_a_second_consecutive_tick(self):
         state = self.make_state()
@@ -133,6 +138,9 @@ class AlarmStateTests(unittest.TestCase):
         state.update(fix, REF_LAT, REF_LON, adist=50)   # 1st stale tick, tolerated
         result = state.update(fix, REF_LAT, REF_LON, adist=50)  # 2nd stale tick
         self.assertTrue(result.stale_time_is_new)
+        # Only the tick that actually crossed the tolerance counts.
+        self.assertEqual(state.icount, 1)
+        self.assertEqual(state.iseq, 1)
 
     def test_stuck_time_does_not_warn_again_every_tick_after_that(self):
         state = self.make_state()

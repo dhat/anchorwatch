@@ -17,13 +17,14 @@ from geo import calc_distance, calc_bearing
 
 FEET_PER_METER = 3.28084
 
-# Consecutive ticks a fix's time can repeat before stale_time_is_new fires.
+# Consecutive ticks a fix's time can repeat before it counts as bad data.
 # A single missed/delayed sentence on a live NMEA feed (e.g. a multiplexer
 # skipping a beat under load) is common and self-corrects a tick later;
-# only a time that's *still* stuck after this many ticks is worth a
-# warning. stale_time itself is still flagged (and iseq/icount still
-# incremented) starting on the very first stale tick -- only the warning
-# is held back.
+# ticks within this tolerance are a true no-op -- stale_time is flagged
+# (so the smoothing below correctly skips treating a repeated reading as
+# fresh), but icount/iseq are left untouched and no warning fires. Only a
+# time that's *still* stuck once this many ticks have passed counts
+# against iseq/icount and warns, same as any other bad-data condition.
 STALE_TIME_WARN_AFTER_TICKS = 2
 
 
@@ -127,9 +128,15 @@ class AlarmState:
             if self.utc == fix.time:
                 result.stale_time = True
                 self._consecutive_stale_time += 1
-                result.stale_time_is_new = (self._consecutive_stale_time == STALE_TIME_WARN_AFTER_TICKS)
-                self.icount += 1
-                self.iseq += 1
+                # Ticks within the tolerance are a true no-op for the bad-
+                # data counters, not just a silenced warning -- a single
+                # missed sentence that self-corrects next tick shouldn't
+                # nudge iseq/icount (or ever trip maxiseq) at all.
+                if self._consecutive_stale_time >= STALE_TIME_WARN_AFTER_TICKS:
+                    result.stale_time_is_new = (
+                        self._consecutive_stale_time == STALE_TIME_WARN_AFTER_TICKS)
+                    self.icount += 1
+                    self.iseq += 1
             else:
                 self.utc = fix.time
                 self._consecutive_stale_time = 0
