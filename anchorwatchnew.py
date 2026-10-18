@@ -452,14 +452,14 @@ if __name__ == '__main__':
     speed_set = True  # flag for setting speed
     pause_interval = 15  # duration of alarm pause
     pause_count = 0   # tracks duration
-    # 'h' while the swing plot is showing used to print help_str only for it
-    # to be wiped by the very next tick's screen clear, making it basically
-    # unreadable. Holding the clear+redraw off for a few ticks after 'h'
-    # gives the user time to actually read it before the live view resumes.
-    help_pause_interval = 10
-    help_pause_count = 0
     extended_output = False  # default display option
     show_swing_plot = False  # 'v' toggles a continuously-redrawing swing pattern view
+    # 'h' while the swing plot is showing used to just print help_str, only
+    # for it to be wiped by the very next tick's screen clear, making it
+    # basically unreadable. Toggling a persistent help panel into the
+    # redraw itself (see swing_plot.render()'s help_text param) means it
+    # stays up for as long as the user wants it, not just a few ticks.
+    show_help = False
     lat = 0       # to ensure a value is set
     lon = 0       # to ensure a value is set
     reflat = 0    # to ensure a value is set
@@ -511,7 +511,7 @@ if __name__ == '__main__':
         swing_plot.render() draws as part of that same redraw.
         """
         recent_events.append(message)
-        if not (show_swing_plot and help_pause_count == 0):
+        if not show_swing_plot:
             print("\n" + message)
 
     help_str = "\nHelp: \'h\': Use \'a<enter>\' to show anchor position, \'c<enter>\' to change circle center lat/lon, \'p<enter>\' to temporarily pause alarm, \'q<enter>\' to quit the program, \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'t<enter>\' to test alarm, \'v<enter>\' to toggle a live view of the recent swing pattern, \'w<enter>\' to change wind speed/heading alarm limits, \'x<enter>\' to toggle short and long output formats or \'z<enter>\' to clear recorded alarm positions."
@@ -527,8 +527,6 @@ if __name__ == '__main__':
       runcount += 1
       if pause_count > 0:
         pause_count -= 1
-      if help_pause_count > 0:
-        help_pause_count -= 1
       if osname == "hildon":
         if alarm.aset and pause_count == 0:
           hildon.hildon_play_system_sound("/usr/share/sounds/ui-general_warning.wav")
@@ -716,21 +714,21 @@ if __name__ == '__main__':
 
       wind_text = format_wind(wind)
 
-      if show_swing_plot and help_pause_count == 0:
+      if show_swing_plot:
         # Clear + redraw in place each tick, like a live radar sweep. This
         # also clears away any plain-printed messages (alarm triggered,
         # invalid gps, etc.) -- the buzzer/light alarm is still the primary
         # alert while this view is active, not the on-screen text -- but
-        # log_event() routes those same messages into recent_events, which
-        # is rendered as part of this same redraw below, so they're still
-        # visible without scrolling the map off-screen. Skipped for a few
-        # ticks right after 'h' -- see help_pause_count above.
+        # log_event() routes those same messages into recent_events, and
+        # 'h' toggles show_help, both rendered as part of this same redraw
+        # below, so they're visible without scrolling the map off-screen.
         sys.stdout.write('\033[2J\033[H')
         current_offset = position_history[-1] if position_history else None
         sys.stdout.write(swing_plot.render(
             position_history, adist, current=current_offset, error_feet=alarm.pos_error,
             alarm_points=alarm_points, speed_alarm_points=speed_alarm_points,
-            heading_alarm_points=heading_alarm_points, recent_events=recent_events))
+            heading_alarm_points=heading_alarm_points, recent_events=recent_events,
+            help_text=help_str if show_help else None))
         sys.stdout.write('\n\n')
 
       # Trailing '\033[K' (erase to end of line) instead of fixed padding
@@ -783,8 +781,10 @@ if __name__ == '__main__':
           print("Keeping previous center point")
         fix = get_current_fix()
       elif menu == 'h':
-        print(help_str)
-        help_pause_count = help_pause_interval
+        if show_swing_plot:
+          show_help = not show_help
+        else:
+          print(help_str)
       elif menu == 'p':
         print("Pausing alarm")
         pause_count = pause_interval

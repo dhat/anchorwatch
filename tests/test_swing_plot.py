@@ -26,6 +26,21 @@ class SwingPlotTests(unittest.TestCase):
         output = swing_plot.render([], radius_feet=0, width=11, height=7, recent_events=[])
         self.assertNotIn("Recent events:", output)
 
+    def test_no_help_panel_when_not_given(self):
+        output = swing_plot.render([], radius_feet=0, width=11, height=7)
+        self.assertNotIn("Help:", output)
+
+    def test_help_panel_shown_when_given(self):
+        output = swing_plot.render(
+            [], radius_feet=0, width=11, height=7, help_text="Help: 'q' to quit.")
+        self.assertIn("Help: 'q' to quit.", output)
+
+    def test_help_panel_appears_above_recent_events(self):
+        output = swing_plot.render(
+            [], radius_feet=0, width=11, height=7,
+            help_text="Help: 'q' to quit.", recent_events=["Alarm cleared at 10/18/26 14:40:36"])
+        self.assertLess(output.index("Help: 'q' to quit."), output.index("Recent events:"))
+
     def test_grid_dimensions_match_requested_size(self):
         output = swing_plot.render([], radius_feet=50, width=15, height=9)
         lines = output.split('\n')
