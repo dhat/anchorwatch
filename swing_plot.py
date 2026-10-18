@@ -30,7 +30,8 @@ CURRENT_CHAR = 'B'  # current boat position -- always drawn on top of everything
 
 
 def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_feet=None,
-           alarm_points=None, speed_alarm_points=None, heading_alarm_points=None):
+           alarm_points=None, speed_alarm_points=None, heading_alarm_points=None,
+           recent_events=None):
     """points: iterable of (east_feet, north_feet) offsets from center.
 
     current: the boat's current position, as an (east_feet, north_feet)
@@ -74,11 +75,21 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
     explicitly cleared (unlike points, a rolling recent-history window),
     so past alarm episodes stay visible across the session.
 
+    recent_events: iterable of already-formatted event-message strings
+    (warnings, alarm triggered/cleared, bad data, etc), oldest first,
+    appended as a trailing panel below the legend -- this view does a
+    full clear+redraw every tick, which would otherwise wipe out any
+    message printed the normal way before the caller could read it. The
+    caller is responsible for bounding this (e.g. a small deque) so the
+    panel can't grow the plot without limit; this function renders
+    whatever it's given as-is.
+
     Returns a multi-line string: a width x height character grid with the
     center marked, the current alarm radius circle overlaid, recent points
     density-shaded by how often each cell was visited, and the current
     position marked distinctly, followed by a caption line and a legend
-    line spelling out what each marker/density character means.
+    line spelling out what each marker/density character means, and
+    (if given) a recent-events panel.
     """
     points = list(points)
     alarm_points = list(alarm_points) if alarm_points is not None else []
@@ -147,7 +158,11 @@ def render(points, radius_feet, width=WIDTH, height=HEIGHT, current=None, error_
               "density, rarely..often visited: %s") % (
         CENTER_CHAR, RADIUS_CHAR, ERROR_CHAR, ALARM_CHAR, SPEED_ALARM_CHAR, HEADING_ALARM_CHAR,
         CURRENT_CHAR, DENSITY_CHARS[1:])
-    return '\n'.join(lines) + '\n' + caption + '\n' + legend
+    output = '\n'.join(lines) + '\n' + caption + '\n' + legend
+    recent_events = list(recent_events) if recent_events is not None else []
+    if recent_events:
+        output += '\nRecent events:\n' + '\n'.join(recent_events)
+    return output
 
 
 def worst_case_point(current, error_feet):

@@ -9,6 +9,23 @@ class SwingPlotTests(unittest.TestCase):
         lines = output.split('\n')
         self.assertEqual(len(lines), 9)  # 7 grid rows + caption + legend line
 
+    def test_no_recent_events_panel_when_not_given(self):
+        output = swing_plot.render([], radius_feet=0, width=11, height=7)
+        self.assertNotIn("Recent events:", output)
+
+    def test_recent_events_panel_lists_each_message_given(self):
+        output = swing_plot.render(
+            [], radius_feet=0, width=11, height=7,
+            recent_events=["WARNING: Time stopped at 10/18/26 14:40:36",
+                            "Resetting iseq from 1  to 0 at 10/18/26 14:40:40"])
+        self.assertIn("Recent events:", output)
+        self.assertIn("WARNING: Time stopped at 10/18/26 14:40:36", output)
+        self.assertIn("Resetting iseq from 1  to 0 at 10/18/26 14:40:40", output)
+
+    def test_empty_recent_events_list_omits_the_panel(self):
+        output = swing_plot.render([], radius_feet=0, width=11, height=7, recent_events=[])
+        self.assertNotIn("Recent events:", output)
+
     def test_grid_dimensions_match_requested_size(self):
         output = swing_plot.render([], radius_feet=50, width=15, height=9)
         lines = output.split('\n')

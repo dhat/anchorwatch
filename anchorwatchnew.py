@@ -495,6 +495,25 @@ if __name__ == '__main__':
     speed_alarm_points = []    # speed-triggered (raw current position)
     heading_alarm_points = []  # wind speed + heading triggered (raw current position)
 
+    # Last few event messages (warnings, alarm triggered/cleared, bad data,
+    # etc), for the swing-plot view's recent-events panel -- see
+    # swing_plot.render()'s recent_events param. Bounded (unlike
+    # alarm_points) since this is just "what just happened," not a record
+    # meant to be reviewed across the whole session.
+    recent_events = deque(maxlen=5)
+
+    def log_event(message):
+        """Record an event message, and print it live via the normal
+        scrolling terminal unless the swing-plot view is about to
+        clear+redraw this tick -- which would otherwise wipe out a plain
+        print() before the user could ever read it. In that case the
+        message still reaches the screen, via the recent-events panel
+        swing_plot.render() draws as part of that same redraw.
+        """
+        recent_events.append(message)
+        if not (show_swing_plot and help_pause_count == 0):
+            print("\n" + message)
+
     help_str = "\nHelp: \'h\': Use \'a<enter>\' to show anchor position, \'c<enter>\' to change circle center lat/lon, \'p<enter>\' to temporarily pause alarm, \'q<enter>\' to quit the program, \'r<enter>\' to change radius limit, \'s<enter>\' to change speed limit, \'t<enter>\' to test alarm, \'v<enter>\' to toggle a live view of the recent swing pattern, \'w<enter>\' to change wind speed/heading alarm limits, \'x<enter>\' to toggle short and long output formats or \'z<enter>\' to clear recorded alarm positions."
 
     # This is to prevent the next fix from having the same time and triggering an invalid gps data warning
@@ -531,7 +550,7 @@ if __name__ == '__main__':
             buzzer_ctrl.buzzer_off()
             buzzer_on = False
           if not light_on:
-            print("\nAlarm triggered", time.strftime("%D %H:%M:%S", time.localtime()))
+            log_event("Alarm triggered " + time.strftime("%D %H:%M:%S", time.localtime()))
             acount += 1
             buzzer_ctrl.light_on()
             light_on = True
@@ -541,7 +560,7 @@ if __name__ == '__main__':
           alertSound.play()
 
         if alarm.iseq > maxiseq:
-           print("\nInvalid gps", alarm.iseq, "times which is over threshold of", maxiseq)
+           log_event("Invalid gps %s times which is over threshold of %s" % (alarm.iseq, maxiseq))
            buzzer_ctrl.light_on()
            buzzer_ctrl.buzzer_once()
            sleep(1)
@@ -559,7 +578,7 @@ if __name__ == '__main__':
                                wind_speed_knots=wind.wind_speed_knots,
                                wind_angle_off_bow=wind.relative_angle_off_bow)
         if result.invalid_fix_is_new:
-          print('\nInvalid gps data at', time.strftime("%D %H:%M:%S", time.localtime()))
+          log_event('Invalid gps data at ' + time.strftime("%D %H:%M:%S", time.localtime()))
       else:
         lat = float(fix.lat)
         lon = float(fix.lon)
@@ -649,7 +668,9 @@ if __name__ == '__main__':
                                wind_angle_off_bow=wind.relative_angle_off_bow)
 
         if result.bad_distance:
-          print("\nbad distance", result.bad_distance_value, "with speed", speed / KNOTS_TO_MPS, "kt and acceleration", (speed - alarm.avgspeed) / KNOTS_TO_MPS, "kt/tick at", time.strftime("%D %H:%M:%S", time.localtime()))
+          log_event("bad distance %s with speed %s kt and acceleration %s kt/tick at %s" % (
+            result.bad_distance_value, speed / KNOTS_TO_MPS, (speed - alarm.avgspeed) / KNOTS_TO_MPS,
+            time.strftime("%D %H:%M:%S", time.localtime())))
         else:
           current_offset_this_tick = offset_from_center(reflat, reflon, lat, lon)
           position_history.append(current_offset_this_tick)
@@ -671,21 +692,24 @@ if __name__ == '__main__':
             # "worst case" adjustment, so mark the raw current position.
             heading_alarm_points.append(current_offset_this_tick)
           if result.stale_time and result.stale_time_is_new:
-            print("\nWARNING: Time stopped at GPS time", fix.time, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+            log_event("WARNING: Time stopped at GPS time %s at %s" % (
+              fix.time, time.strftime("%D %H:%M:%S", time.localtime())))
           if result.iseq_reset:
-            print("\nResetting iseq from", old_iseq, " to 0 at", time.strftime("%D %H:%M:%S", time.localtime()))
+            log_event("Resetting iseq from %s  to 0 at %s" % (
+              old_iseq, time.strftime("%D %H:%M:%S", time.localtime())))
             buzzer_ctrl.buzzer_light_off()
             buzzer_on = False
             light_on = False
 
           if result.bad_speed:
-            print("\nbad speed", speed, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+            log_event("bad speed %s at %s" % (speed, time.strftime("%D %H:%M:%S", time.localtime())))
 
           if result.low_sats:
-            print("\nNot enough sats tracked:", fix.sats_valid, "out of", fix.sats, "total with min sats:", min_sats, "at", time.strftime("%D %H:%M:%S", time.localtime()))
+            log_event("Not enough sats tracked: %s out of %s total with min sats: %s at %s" % (
+              fix.sats_valid, fix.sats, min_sats, time.strftime("%D %H:%M:%S", time.localtime())))
 
         if result.alarm_cleared:
-          print("\nAlarm cleared at", time.strftime("%D %H:%M:%S", time.localtime()))
+          log_event("Alarm cleared at " + time.strftime("%D %H:%M:%S", time.localtime()))
           buzzer_ctrl.buzzer_light_off()
           buzzer_on = False
           light_on = False
@@ -694,16 +718,19 @@ if __name__ == '__main__':
 
       if show_swing_plot and help_pause_count == 0:
         # Clear + redraw in place each tick, like a live radar sweep. This
-        # also clears away any messages printed above (alarm triggered,
+        # also clears away any plain-printed messages (alarm triggered,
         # invalid gps, etc.) -- the buzzer/light alarm is still the primary
-        # alert while this view is active, not the on-screen text. Skipped
-        # for a few ticks right after 'h' -- see help_pause_count above.
+        # alert while this view is active, not the on-screen text -- but
+        # log_event() routes those same messages into recent_events, which
+        # is rendered as part of this same redraw below, so they're still
+        # visible without scrolling the map off-screen. Skipped for a few
+        # ticks right after 'h' -- see help_pause_count above.
         sys.stdout.write('\033[2J\033[H')
         current_offset = position_history[-1] if position_history else None
         sys.stdout.write(swing_plot.render(
             position_history, adist, current=current_offset, error_feet=alarm.pos_error,
             alarm_points=alarm_points, speed_alarm_points=speed_alarm_points,
-            heading_alarm_points=heading_alarm_points))
+            heading_alarm_points=heading_alarm_points, recent_events=recent_events))
         sys.stdout.write('\n\n')
 
       # Trailing '\033[K' (erase to end of line) instead of fixed padding
