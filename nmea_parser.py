@@ -25,12 +25,14 @@ from collections import deque
 
 # HOST = "localhost"
 # PORT = 23000
+# NOTE port 23001 has wind correction
 # DELIMITER = b"\r\n"
 # BUFFER_SIZE = 4096
 global_max_speed = 0
 global_verbose = False
 global_max_errors = 10
-ser = serial.serial_for_url("socket://localhost:23000/logging=debug")  #, baudrate=36400)
+#ser = serial.serial_for_url("socket://localhost:23000/logging=debug")  #, baudrate=36400)
+ser = serial.serial_for_url("socket://localhost:23001/logging=debug")  #, baudrate=36400)
 
 
 # Create a Signal Handler for Signals.SIGINT:  CTRL + C

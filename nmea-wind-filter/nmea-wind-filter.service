@@ -1,0 +1,13 @@
+[Unit]
+Description=NMEA wind spike filter (23000 raw -> 23001 filtered)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/nmea_wind_filter.py
+Restart=always
+RestartSec=5
+DynamicUser=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
